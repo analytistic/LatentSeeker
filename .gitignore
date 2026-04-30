@@ -1,0 +1,44 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
+
+# Data & model outputs
+data/
+
+# Checkpoints
+checkpoints/
+outputs/
+*.ckpt
+*.safetensors
+*.txt
+*.bin
+
+# config
+*.json
+*.jsonl
+
+# Jupyter notebooks (if any)
+.ipynb_checkpoints/
+
+# pytest
+.pytest_cache/
+.cache/
