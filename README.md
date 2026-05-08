@@ -2,6 +2,8 @@
 
 Compress long text contexts into compact latent tokens, analogous to how vision-language models (like Qwen3-VL) compress images.
 
+![LatentSeeker architecture](assets/LatentSeeker.png)
+
 ## Motivation
 
 Long-context LLMs suffer from quadratic attention cost. LatentSeeker treats long documents the way VL models treat images — **compress first, process later**:
