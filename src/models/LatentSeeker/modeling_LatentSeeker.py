@@ -429,6 +429,39 @@ class LatentSeekerForConditionalGeneration(LatentSeekerPreTrainedModel, Generati
             model.model.language_model.embed_tokens.weight.data
         )
 
+        # Copy encoder layer weights from LM pretrained layers
+        num_encoder_layers = len(model.model.longtext.layers)
+        for i in range(num_encoder_layers):
+            src = model.model.language_model.layers[i]
+            dst = model.model.longtext.layers[i]
+
+            # Attention projections (identical shapes, different class name)
+            for proj in ("q_proj", "k_proj", "v_proj", "o_proj"):
+                getattr(dst.attn, proj).weight.data.copy_(
+                    getattr(src.self_attn, proj).weight.data
+                )
+                bias_src = getattr(src.self_attn, proj).bias
+                if bias_src is not None:
+                    getattr(dst.attn, proj).bias.data.copy_(bias_src.data)
+
+            # QK RMSNorm
+            dst.attn.q_norm.weight.data.copy_(src.self_attn.q_norm.weight.data)
+            dst.attn.k_norm.weight.data.copy_(src.self_attn.k_norm.weight.data)
+
+            # MLP (same class)
+            dst.mlp.load_state_dict(src.mlp.state_dict())
+
+            # Layer norms (same class)
+            dst.input_layernorm.weight.data.copy_(src.input_layernorm.weight.data)
+            dst.post_attention_layernorm.weight.data.copy_(
+                src.post_attention_layernorm.weight.data
+            )
+
+        # Copy final norm
+        model.model.longtext.norm.weight.data.copy_(
+            model.model.language_model.norm.weight.data
+        )
+
         return model
 
     def get_input_embeddings(self):

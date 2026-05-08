@@ -1,6 +1,7 @@
 """LatentSeeker pre-training: repeat task with curriculum compression."""
 
 import argparse
+import json
 import sys
 
 import yaml
@@ -37,7 +38,14 @@ def _parse_args(
         for k, v in yaml_config.items():
             if v is not None:
                 flat.append(f"--{k}")
-                flat.append(str(v))
+                if isinstance(v, list):
+                    # Expand list items as separate positional args for nargs='+'
+                    for item in v:
+                        flat.append(json.dumps(item) if isinstance(item, (list, tuple)) else str(item))
+                elif isinstance(v, dict):
+                    flat.append(json.dumps(v))
+                else:
+                    flat.append(str(v))
 
         # Strip --config_path from CLI overrides since HF parser doesn't know it
         cli = sys.argv[1:]
