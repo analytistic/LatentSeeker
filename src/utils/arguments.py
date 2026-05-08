@@ -37,5 +37,10 @@ class LatentSeekerTrainingArguments(TrainingArguments):
         metadata={"help": "Must be False — collator needs 'messages' column."},
     )
 
+    freeze_modules: list[str] | None = field(
+        default=None,
+        metadata={"help": "Module paths to freeze. e.g. ['model.language_model']"},
+    )
+
     bf16: bool = field(default=True)
 

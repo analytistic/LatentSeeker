@@ -24,12 +24,14 @@ Long doc ─→ LongtextEncoder ─→ latent vectors (N tokens)
                        lm_head
 ```
 
-### LongtextEncoder
+### LatentSeekerModel
 
-- **Flat concat + cu_seqlens**: All documents concatenated into one flat sequence, FA2 varlen attention with cumulative segment boundaries for document isolation
-- **Bidirectional attention** (`LongtextEncoderBlock`): Pre-norm RMSNorm + GQA attention + MLP, independent per-segment via cu_seqlens
-- **RoPE**: 1D rotary position encoding, positions reset per document segment
-- **Segment pooling** (`LongertextMerger`): Each doc's tokens divided evenly into `num_queries` blocks, each block average-pooled to 1 token → MLP bridge to decoder hidden space
+| Submodule | Init | Description |
+|-----------|------|-------------|
+| `language_model` | Pretrained Qwen3VL | Text decoder backbone |
+| `longtext.embed_tokens` | Copy from LM embed | Encoder token embedding |
+| `longtext.layers` | Copy from LM layers | Bidirectional encoder blocks |
+| `longtext.merger` | Random init | Pooling + MLP bridge to LM space |
 
 ### Generation flow
 
@@ -41,44 +43,64 @@ messages = [
     ]},
 ]
 
-# Processor handles template, tokenization, placeholders
-inputs = processor.apply_chat_template(messages, tokenize=True, return_tensors="pt")
-
-# Model forward: encode longtext → replace placeholders → generate
-outputs = model.generate(**inputs)
-```
-
-## Quick start
-
-```python
-from transformers import AutoProcessor
-from src.models.LatentSeeker import LatentSeekerForConditionalGeneration
-
-processor = AutoProcessor.from_pretrained("path/to/latentseeker")
-model = LatentSeekerForConditionalGeneration.from_pretrained("path/to/latentseeker")
-
-messages = [
-    {"role": "user", "content": [
-        {"type": "longtext", "longtext": "Long document content here..."},
-        {"type": "text", "text": "What is the key argument?"},
-    ]},
-]
-
 inputs = processor.apply_chat_template(messages, tokenize=True, return_tensors="pt")
 outputs = model.generate(**inputs)
 print(processor.decode(outputs[0]))
 ```
 
+## Training
+
+### Pretrain task: longtext repetition
+
+Each sample contains a long document as both encoder input and decoder target. The model learns to compress the document into latent tokens and then reconstruct it.
+
+### Progressive training plan
+
+| Stage | Trainable | Frozen | Learning rate | Goal |
+|-------|-----------|--------|---------------|------|
+| 1 | `longtext.merger` | Everything else | 1e-3 | Bridge alignment: random init → stable mapping |
+| 2 | `longtext.layers` + merger | `language_model` + embed_tokens | 1e-4 | Encoder learns bidirectional compression |
+| 3 | `longtext.embed_tokens` + layers + merger | `language_model` | 1e-4 | Embedding adapts to encoder needs |
+| 4 | All parameters | None | 1e-5 | Full fine-tune: LM adapts to latent inputs |
+
+Between stages, save a checkpoint and resume with updated freeze config.
+
+### Usage
+
+```bash
+# Stage 1: train merger only
+python main.py --config_path configs/pretrain_stage1.yaml
+
+# Stage 2: continue from stage1 checkpoint, train layers + merger
+python main.py --config_path configs/pretrain_stage2.yaml \
+    --model_name outputs/stage1
+
+# Stage 3: add embed_tokens
+python main.py --config_path configs/pretrain_stage3.yaml \
+    --model_name outputs/stage2
+
+# Stage 4: full fine-tune
+python main.py --config_path configs/pretrain_stage4.yaml \
+    --model_name outputs/stage3
+```
 
 ## Components
 
-| Module                                   | Description                                                      |
-| ---------------------------------------- | ---------------------------------------------------------------- |
-| `LatentSeekerEncoderModel`             | Longtext encoder: embed → bidirectional blocks → merge         |
-|                                          |                                                                  |
-| `LatentSeekerModel`                    | Encoder + Qwen3VLTextModel                                       |
-| `LatentSeekerForConditionalGeneration` | Full model with lm_head, GenerationMixin                         |
-| `LatentSeekerProcessor`                | Chat template, longtext placeholder insertion, assistant masking |
+| Module | Description |
+|--------|-------------|
+| `LatentSeekerEncoderModel` | Longtext encoder: embed → bidirectional blocks → merger |
+| `LatentSeekerModel` | Encoder + Qwen3VLTextModel |
+| `LatentSeekerForConditionalGeneration` | Full model with lm_head, GenerationMixin |
+| `LatentSeekerProcessor` | Chat template, longtext placeholder insertion, assistant masking |
+
+## Data preprocessing
+
+```bash
+# Single process, runs once per dataset
+python src/dataset/preprocess_wiki.py \
+    --input data/wiki/wiki.jsonl \
+    --output data/wiki/processed_wiki
+```
 
 ## Dependencies
 
@@ -86,6 +108,7 @@ print(processor.decode(outputs[0]))
 - PyTorch >= 2.10
 - transformers >= 5.3.0
 - datasets
+- deepspeed
 
 ## Design references
 

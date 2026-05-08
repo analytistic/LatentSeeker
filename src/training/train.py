@@ -13,6 +13,7 @@ from src.models.LatentSeeker.modeling_LatentSeeker import (
 from src.models.LatentSeeker.configuration_LatentSeeker import LatentSeekerConfig
 from src.models.LatentSeeker.processing_LatentSeeker import LatentSeekerProcessor
 from src.utils.arguments import DataArgs, ModelArgs, LatentSeekerTrainingArguments
+from src.utils.freeze import apply_freeze
 from transformers import PreTrainedConfig
 
 from .trainer import build_trainer
@@ -84,6 +85,7 @@ def train(config_path: str | None = None):
         config=config,
     )
 
+    apply_freeze(model, train_args.freeze_modules)
 
     dataset = get_wiki(data_args.data_path, max_samples=data_args.max_samples or 1000)
 
