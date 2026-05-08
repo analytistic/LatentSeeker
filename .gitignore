@@ -33,8 +33,8 @@ outputs/
 *.bin
 
 # model config
-*.json
-*.jsonl
+src/models/**/*.json
+src/models/**/*.jsonl
 
 # Jupyter notebooks (if any)
 .ipynb_checkpoints/
