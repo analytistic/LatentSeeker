@@ -3,8 +3,8 @@ from transformers.models.qwen3_vl import Qwen3VLTextConfig, Qwen3VLConfig
 
 
 class LatentEncoderConfig(Qwen3VLTextConfig):
-    model_type = "latent_encoder"
-    base_config_key = "latent_config"
+    model_type = "longtext_encoder"
+    base_config_key = "longtext_config"
     default_theta = 500000.0
 
     def __init__(
@@ -25,7 +25,7 @@ class LatentEncoderConfig(Qwen3VLTextConfig):
 class LatentSeekerConfig(PreTrainedConfig):
     model_type = "latent_seeker"
     sub_configs = {
-        "longtext_config": Qwen3VLTextConfig,
+        "longtext_config": LatentEncoderConfig,
         "text_config": Qwen3VLTextConfig,
     }
     keys_to_ignore_at_inference = ["past_key_values"]
@@ -34,7 +34,7 @@ class LatentSeekerConfig(PreTrainedConfig):
         self,
         longtext_config=None,
         text_config=None,
-        longtext_token_id=10, #151671
+        longtext_token_id=151671,
         tie_word_embeddings=False,
         **kwargs,
     ):

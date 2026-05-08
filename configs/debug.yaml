@@ -1,0 +1,36 @@
+output_dir: outputs/debug
+
+# Data
+data_path: data/wiki/processed_wiki
+max_samples: 5
+per_device_train_batch_size: 1
+gradient_accumulation_steps: 1
+dataloader_num_workers: 0
+remove_unused_columns: false
+
+# Schedule
+max_steps: 5
+learning_rate: 1e-4
+warmup_steps: 1
+lr_scheduler_type: cosine
+
+# Logging
+logging_steps: 1
+save_steps: 100
+
+# CPU debug
+bf16: false
+deepspeed: null
+use_cpu: true
+
+compress_stages: null
+report_to: none
+
+# Model: tiny vocab, 3 layers, rest uses config.json defaults
+model_config:
+  text_config:
+    vocab_size: 10
+    num_hidden_layers: 3
+  longtext_config:
+    vocab_size: 10
+    num_hidden_layers: 3

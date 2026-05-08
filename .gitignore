@@ -32,7 +32,7 @@ outputs/
 *.txt
 *.bin
 
-# config
+# model config
 *.json
 *.jsonl
 

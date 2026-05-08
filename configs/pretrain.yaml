@@ -1,0 +1,41 @@
+output_dir: outputs/pretrain
+
+# Data
+data_path: data/wiki/processed_wiki
+data_name: wiki
+split: train
+per_device_train_batch_size: 4
+gradient_accumulation_steps: 8
+dataloader_num_workers: 4
+remove_unused_columns: false
+
+# Schedule
+num_train_epochs: 1
+learning_rate: 1e-5
+warmup_steps: 100
+lr_scheduler_type: cosine
+weight_decay: 0.1
+max_grad_norm: 1.0
+
+# Seed
+seed: 42
+
+# Logging & saving
+logging_steps: 1
+save_steps: 50
+save_total_limit: 1
+
+# Precision
+bf16: true
+
+# Reporting
+report_to: none
+
+# DeepSpeed (set path or leave empty)
+deepspeed: deepspeed/zero1.json
+
+# LatentSeeker-specific
+compress_stages:
+  - [0, 2]
+  - [0.1, 8]
+  - [0.5, 32]

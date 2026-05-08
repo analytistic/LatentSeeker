@@ -11,6 +11,7 @@ from transformers.processing_utils import AllKwargsForChatTemplate, Unpack, rend
 from transformers.tokenization_utils_base import PreTokenizedInput, TextInput
 from transformers.video_utils import VideoInput
 from transformers.processing_utils import ProcessorChatTemplateKwargs
+import torch
 
 LongtextInput = Union[str, list[str], list[list[str]]]
 
@@ -466,7 +467,8 @@ class LatentSeekerProcessor(Qwen3VLProcessor):
                         #         end_pos = len(input_ids[i])
                         #     for token_id in range(start_pos, end_pos if end_pos else len(input_ids[i])):
                         #         current_mask[token_id] = 1
-                        current_mask = self._get_assistant_masks(input_ids[i].tolist())
+                        input_ids_i = input_ids[i] if isinstance(input_ids[i], list) else input_ids[i].tolist()
+                        current_mask = self._get_assistant_masks(input_ids_i)
                         assistant_masks.append(current_mask)
                     out["assistant_masks"] = assistant_masks
                     out.convert_to_tensors(tensor_type=kwargs.get("return_tensors"))

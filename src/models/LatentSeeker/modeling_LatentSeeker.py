@@ -64,7 +64,7 @@ class LongertextMerger(nn.Module):
 
         # Count tokens per bin and average
         counts = torch.zeros(total_output, device=device, dtype=longtext_embeds.dtype)
-        counts.index_add_(0, pool_indices, torch.ones(longtext_embeds.shape[0], device=device))
+        counts.index_add_(0, pool_indices, torch.ones(longtext_embeds.shape[0], device=device, dtype=longtext_embeds.dtype))
 
         pooled = summed / counts.unsqueeze(-1).clamp(min=1)
         return self.mlp(pooled)
@@ -413,6 +413,24 @@ class LatentSeekerForConditionalGeneration(LatentSeekerPreTrainedModel, Generati
         )
         self.post_init()
 
+    @classmethod
+    def init_from_pretrained(cls, pretrained_path: str, config=None, **kwargs):
+        if config is None:
+            config = LatentSeekerConfig.from_pretrained(pretrained_path)
+
+        model = cls.from_pretrained(
+            pretrained_path,
+            config=config,
+            ignore_mismatched_sizes=True,
+            **kwargs,
+        )
+
+        model.model.longtext.embed_tokens.weight.data.copy_(
+            model.model.language_model.embed_tokens.weight.data
+        )
+
+        return model
+
     def get_input_embeddings(self):
         return self.model.get_input_embeddings()
 
@@ -563,6 +581,7 @@ class LatentSeekerForConditionalGeneration(LatentSeekerPreTrainedModel, Generati
         position_ids = torch.cat([text_positions, vision_positions], dim=0)
 
         return position_ids
+    
 
 
 __all__ = ["LatentSeekerEncoderModel", "LatentSeekerModel", "LatentSeekerForConditionalGeneration"]
