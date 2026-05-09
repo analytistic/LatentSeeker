@@ -103,7 +103,7 @@ def train(config_path: str | None = None):
 
     apply_freeze(model, train_args.freeze_modules)
 
-    dataset = get_wiki(data_args.data_path, max_samples=data_args.max_samples or 1000)
+    dataset = get_wiki(data_args.data_path, max_samples=data_args.max_samples)
 
     trainer = build_trainer(
         model=model,
