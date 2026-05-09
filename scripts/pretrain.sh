@@ -11,6 +11,6 @@ if [ ! -d "data/wiki/processed_wiki" ]; then
         --output data/wiki/processed_wiki
 fi
 
-nohup ASCEND_RT_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 deepspeed --num_gpus=8 main.py --config_path configs/pretrain_stage1.yaml \
+nohup env ASCEND_RT_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 deepspeed main.py \
+    --config_path configs/pretrain_stage1.yaml \
     --output_dir "$OUTPUT_DIR" \
-    > /dev/null 2>&1 &
