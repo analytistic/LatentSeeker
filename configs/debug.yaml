@@ -3,25 +3,31 @@ output_dir: outputs/debug
 # Data
 data_path: data/debug/processed_debug
 max_samples: 5
-per_device_train_batch_size: 1
-gradient_accumulation_steps: 1
-dataloader_num_workers: 0
+per_device_train_batch_size: 4
+gradient_accumulation_steps: 8
+dataloader_num_workers: 4
 remove_unused_columns: false
 
 # Schedule
-max_steps: 5
+num_train_epochs: 1
 learning_rate: 1e-3
-warmup_steps: 1
+warmup_steps: 100
 lr_scheduler_type: cosine
+weight_decay: 0.01
+max_grad_norm: 1.0
 
-# Logging
+# Seed
+seed: 42
+
+# Logging & saving
 logging_steps: 1
 save_steps: 100
+save_total_limit: 2
 
-# CPU debug
-bf16: false
-deepspeed: null
-use_cpu: true
+# Precision
+bf16: true
+report_to: none
+deepspeed: deepspeed/zero1.json
 
 # Freeze: train merger only (same as stage1)
 freeze_modules:
@@ -29,8 +35,11 @@ freeze_modules:
   - model.longtext.embed_tokens
   - model.longtext.layers
 
-compress_stages: null
-report_to: none
+# Compression
+compress_stages:
+  - [0, 2]
+  - [0.1, 8]
+  - [0.5, 32]
 
 # Model: tiny vocab, 3 layers, rest uses config.json defaults
 model_config:

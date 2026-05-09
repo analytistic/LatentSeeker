@@ -11,7 +11,8 @@ if [ ! -d "data/debug/processed_debug" ]; then
         --output data/debug/processed_debug
 fi
 
-ASCEND_RT_VISIBLE_DEVICES=0,1 deepspeed --num_gpus=2 main.py --config_path configs/debug.yaml \
+python main.py --config_path configs/debug.yaml \
     --output_dir "$OUTPUT_DIR" \
-    --use_cpu false \
-    --deepspeed deepspeed/zero1.json
+    --bf16 false \
+    --use_cpu true \
+    --deepspeed ""

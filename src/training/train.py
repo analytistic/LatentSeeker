@@ -34,12 +34,16 @@ def _parse_args(
         # Extract model config overrides (not a CLI arg)
         model_config_override = yaml_config.pop("model_config", None)
 
+        # HfArgumentParser can't handle nested list types like list[tuple[float, int]].
+        # Pull those out and set them directly after parsing.
+        complex_list_key = "compress_stages"
+        complex_list_val = yaml_config.pop(complex_list_key, None)
+
         flat = []
         for k, v in yaml_config.items():
             if v is not None:
                 flat.append(f"--{k}")
                 if isinstance(v, list):
-                    # Expand list items as separate positional args for nargs='+'
                     for item in v:
                         flat.append(json.dumps(item) if isinstance(item, (list, tuple)) else str(item))
                 elif isinstance(v, dict):
@@ -57,6 +61,10 @@ def _parse_args(
         train_args, model_args, data_args = parser.parse_args_into_dataclasses(
             args=flat + cli
         )
+
+        # Restore nested complex types that HfArgumentParser can't handle from CLI args
+        if complex_list_val is not None:
+            train_args.compress_stages = [tuple(item) for item in complex_list_val]
     else:
         model_config_override = None
         train_args, model_args, data_args = parser.parse_args_into_dataclasses()
