@@ -32,7 +32,7 @@ def build_trainer(
 
     callbacks = []
     if compress_stages:
-        callbacks.append(CurriculumCallback(compress_stages))
+        callbacks.append(CurriculumCallback(compress_stages, collator=collator))
 
     return Trainer(
         model=model,
