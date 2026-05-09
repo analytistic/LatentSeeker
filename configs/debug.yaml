@@ -2,10 +2,10 @@ output_dir: outputs/debug
 
 # Data
 data_path: data/debug/processed_debug
-max_samples: 5
-per_device_train_batch_size: 4
-gradient_accumulation_steps: 8
-dataloader_num_workers: 4
+max_samples: 100
+per_device_train_batch_size: 2
+gradient_accumulation_steps: 2
+dataloader_num_workers: 2
 remove_unused_columns: false
 
 # Schedule
@@ -37,9 +37,10 @@ freeze_modules:
 
 # Compression
 compress_stages:
-  - [0, 2]
-  - [0.1, 8]
-  - [0.5, 32]
+  - [0, 1]
+  - [0.1, 1.5]
+  - [0.2, 2]
+  - [0.5, 4]
 
 # Model: tiny vocab, 3 layers, rest uses config.json defaults
 model_config:

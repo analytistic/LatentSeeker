@@ -133,7 +133,7 @@ class LatentSeekerProcessor(Qwen3VLProcessor):
             longtext_num_tokens = []
             for actual_len in longtext_seqlens:
                 if compress_ratio is not None:
-                    num = max(1, actual_len // compress_ratio)
+                    num = max(1, int(actual_len / compress_ratio))
                 else:
                     num = query_num
                 longtext_num_tokens.append(num)

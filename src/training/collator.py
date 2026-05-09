@@ -20,7 +20,7 @@ class DynamicCompressCollator:
     """
 
     processor: Any
-    compress_ratio: int = 8
+    compress_ratio: int | float = 8
     vocab_size: int | None = None
 
     def __call__(self, batch: list[dict]) -> dict[str, torch.Tensor]:
