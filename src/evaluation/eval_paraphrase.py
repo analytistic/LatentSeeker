@@ -77,9 +77,22 @@ def evaluate(
             add_generation_prompt=True,
             return_dict=True,
             return_tensors="pt",
-            longtext_kwargs={"compress_ratio": compress_ratio},
+            compress_ratio=compress_ratio,
         )
         inputs = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in inputs.items()}
+
+        # Remap OOB tokens for small vocab debug configs
+        vocab_size = model.config.text_config.vocab_size
+        if vocab_size is not None:
+            for key in ("input_ids", "longtext_input_ids"):
+                if key in inputs:
+                    t = inputs[key]
+                    if isinstance(t, torch.Tensor) and t.numel() > 0 and t.max().item() >= vocab_size:
+                        longtext_token_id = processor.longtext_token_id
+                        pad_slot = vocab_size - 1
+                        is_pad = t == longtext_token_id
+                        t[~is_pad] = t[~is_pad] % pad_slot
+                        t[is_pad] = pad_slot
 
         # --- Generate ---
         prompt_len = inputs["input_ids"].shape[-1]
