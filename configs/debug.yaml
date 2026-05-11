@@ -29,15 +29,14 @@ bf16: true
 report_to: none
 deepspeed: deepspeed/zero1.json
 
-# Freeze: train merger only (same as stage1)
+# Freeze: LM + embed only, train layers + merger
 freeze_modules:
   - model.language_model
   - model.longtext.embed_tokens
-  - model.longtext.layers
 
 # Compression
 compress_stages:
-  - [0, 1]
+  - [0, 1.3]
   - [0.1, 1.5]
   - [0.2, 2]
   - [0.5, 4]

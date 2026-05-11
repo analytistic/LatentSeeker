@@ -67,7 +67,7 @@ class LongertextMerger(nn.Module):
         counts.index_add_(0, pool_indices, torch.ones(longtext_embeds.shape[0], device=device, dtype=longtext_embeds.dtype))
 
         pooled = summed / counts.unsqueeze(-1).clamp(min=1)
-        return self.mlp(pooled)
+        return pooled  # TODO: re-enable self.mlp(pooled) once Ascend NPU init issue is fixed
 
 
 class LatentSeekerEncoderMLP(nn.Module):

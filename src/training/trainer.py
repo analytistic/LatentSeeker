@@ -34,11 +34,13 @@ def build_trainer(
     if compress_stages:
         callbacks.append(CurriculumCallback(compress_stages, collator=collator))
 
-    return Trainer(
+    trainer = Trainer(
         model=model,
         args=args,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
         data_collator=collator,
         callbacks=callbacks,
+        processing_class=processor,
     )
+    return trainer
