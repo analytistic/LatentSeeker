@@ -43,7 +43,12 @@ if __name__ == "__main__":
         for split in dataset:
             dataset[split] = dataset[split].select(range(min(len(dataset[split]), args.max_samples)))
 
-    dataset = dataset.map(flatten_answers)
-    dataset = dataset.map(squad_to_messages, remove_columns=["context"])
+    # Apply map per-split to avoid DatasetDict.map() merging content dict keys (datasets 4.8.2)
+    for split_name in list(dataset.keys()):
+        ds = dataset[split_name]
+        ds = ds.map(flatten_answers)
+        ds = ds.map(squad_to_messages, remove_columns=["context"])
+        dataset[split_name] = ds
+
     dataset.save_to_disk(args.output)
     print(f"Saved {len(dataset['train'])} train, {len(dataset['validation'])} validation samples to {args.output}")
