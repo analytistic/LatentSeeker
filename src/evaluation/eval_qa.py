@@ -47,7 +47,7 @@ def generate(
             return_tensors="pt",
             compress_ratio=compress_ratio,
         )
-        inputs = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in inputs.items()}
+        inputs = {k: v.to(model.device) if isinstance(v, torch.Tensor) else v for k, v in inputs.items()}
 
         # Remap OOB tokens for debug configs
         vocab_size = model.config.text_config.vocab_size
@@ -110,7 +110,8 @@ def main():
     model = AutoModel.from_pretrained(
         args.model_path,
         torch_dtype=torch.bfloat16 if device != "cpu" else torch.float32,
-    ).to(device).eval()
+        device_map=device,
+    ).eval()
 
     processor = LatentSeekerProcessor.from_pretrained(args.model_path)
 
