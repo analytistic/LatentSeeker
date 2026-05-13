@@ -19,12 +19,9 @@ import sys
 
 import torch
 
-from transformers import TextStreamer
+from transformers import AutoModel, TextStreamer
 
 from src.evaluation.metrics import Metrics
-from src.models.LatentSeeker.modeling_LatentSeeker import (
-    LatentSeekerForConditionalGeneration,
-)
 from src.models.LatentSeeker.processing_LatentSeeker import LatentSeekerProcessor
 
 
@@ -155,7 +152,7 @@ def main():
     device = args.device or ("cuda" if torch.cuda.is_available() else "cpu")
 
     print(f"Loading model from {args.model_path} ...")
-    model = LatentSeekerForConditionalGeneration.from_pretrained(
+    model = AutoModel.from_pretrained(
         args.model_path,
         torch_dtype=torch.bfloat16 if device != "cpu" else torch.float32,
     ).to(device).eval()

@@ -31,11 +31,11 @@ def _parse_args(
         with open(config_path) as f:
             yaml_config = yaml.safe_load(f) or {}
 
-        # Extract model config overrides (not a CLI arg)
+        # Extract params HF's parser can't handle
         model_config_override = yaml_config.pop("model_config", None)
+        resume_from_checkpoint = yaml_config.pop("resume_from_checkpoint", None)
 
         # HfArgumentParser can't handle nested list types like list[tuple[float, int]].
-        # Pull those out and set them directly after parsing.
         complex_list_key = "compress_stages"
         complex_list_val = yaml_config.pop(complex_list_key, None)
 
@@ -51,12 +51,17 @@ def _parse_args(
                 else:
                     flat.append(str(v))
 
-        # Strip --config_path from CLI overrides since HF parser doesn't know it
+        # Strip args HF parser doesn't know about
         cli = sys.argv[1:]
-        for i, arg in enumerate(cli):
-            if arg == "--config_path":
-                cli = cli[:i] + cli[i + 2:]
-                break
+        for skip_key in ("--config_path", "--resume_from_checkpoint"):
+            for i, arg in enumerate(cli):
+                if arg == skip_key:
+                    cli = cli[:i] + cli[i + 2:]
+                    break
+        # Also check if resume_from_checkpoint was passed via CLI
+        for i, arg in enumerate(sys.argv[1:]):
+            if arg == "--resume_from_checkpoint" and i + 2 <= len(sys.argv[1:]):
+                resume_from_checkpoint = sys.argv[1:][i + 1]
 
         train_args, model_args, data_args = parser.parse_args_into_dataclasses(
             args=flat + cli
@@ -67,9 +72,10 @@ def _parse_args(
             train_args.compress_stages = [tuple(item) for item in complex_list_val]
     else:
         model_config_override = None
+        resume_from_checkpoint = None
         train_args, model_args, data_args = parser.parse_args_into_dataclasses()
 
-    return train_args, model_args, data_args, model_config_override
+    return train_args, model_args, data_args, model_config_override, resume_from_checkpoint
 
 
 def train(config_path: str | None = None):
@@ -79,7 +85,7 @@ def train(config_path: str | None = None):
         parsed, _ = p.parse_known_args()
         config_path = parsed.config_path
 
-    train_args, model_args, data_args, model_config_override = _parse_args(config_path)
+    train_args, model_args, data_args, model_config_override, resume_from_checkpoint = _parse_args(config_path)
 
     processor = LatentSeekerProcessor.from_pretrained(model_args.model_name)
     config = LatentSeekerConfig.from_pretrained(model_args.model_name)
@@ -113,7 +119,7 @@ def train(config_path: str | None = None):
         compress_stages=train_args.compress_stages,
     )
 
-    trainer.train()
+    trainer.train(resume_from_checkpoint=resume_from_checkpoint)
 
 
 if __name__ == "__main__":

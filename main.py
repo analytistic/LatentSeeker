@@ -8,6 +8,8 @@ Usage:
 """
 
 from src.training.train import train
+from src.evaluation import eval_qa
 
 if __name__ == "__main__":
-    train()
+    #train()
+    eval_qa.main()
