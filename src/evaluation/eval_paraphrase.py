@@ -46,7 +46,7 @@ def evaluate(
     ref_ids_list = []
 
     for i, sample in enumerate(samples):
-        messages = sample["messages"]
+        messages = [m for m in sample["messages"] if m["role"] != "assistant"]
         ref_text = _get_ref_text(sample)
 
         # --- Tokenize ---
@@ -54,6 +54,7 @@ def evaluate(
             messages,
             tokenize=True,
             add_generation_prompt=True,
+            no_think=True,
             return_dict=True,
             return_tensors="pt",
             compress_ratio=compress_ratio,
