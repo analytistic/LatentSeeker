@@ -4,24 +4,36 @@ Tokenizes messages on-the-fly with configurable compress_ratio,
 enabling curriculum learning without pre-computing multiple tokenized copies.
 """
 
-from dataclasses import dataclass
+import multiprocessing as mp
 from typing import Any
 
 import torch
 
 
-@dataclass
 class DynamicCompressCollator:
     """Collator that tokenizes with dynamic compress_ratio.
+
+    Uses multiprocessing.Value for compress_ratio so that changes made
+    by CurriculumCallback in the main process are visible to DataLoader
+    worker processes (num_workers > 0).
 
     Usage:
         collator = DynamicCompressCollator(processor)
         collator.compress_ratio = 32  # adjusted by callback during training
     """
 
-    processor: Any
-    compress_ratio: int | float = 8
-    vocab_size: int | None = None
+    def __init__(self, processor, vocab_size=None, compress_ratio=8):
+        self.processor = processor
+        self.vocab_size = vocab_size
+        self._ratio = mp.Value('d', compress_ratio)
+
+    @property
+    def compress_ratio(self) -> int | float:
+        return self._ratio.value
+
+    @compress_ratio.setter
+    def compress_ratio(self, value: int | float):
+        self._ratio.value = value
 
     def __call__(self, batch: list[dict]) -> dict[str, torch.Tensor]:
         out = self.processor.apply_chat_template(
