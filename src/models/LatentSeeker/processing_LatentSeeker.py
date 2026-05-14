@@ -243,6 +243,8 @@ class LatentSeekerProcessor(Qwen3VLProcessor):
                 in_assistant = True
                 j += 2
             elif input_ids[j] == end_id:
+                if in_assistant:
+                    mask[j] = 1
                 in_assistant = False
                 j += 1
             else:
