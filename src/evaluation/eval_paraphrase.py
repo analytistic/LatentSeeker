@@ -1,50 +1,42 @@
 """Paraphrase reconstruction evaluation for LatentSeeker.
 
 Usage:
-    python scripts/eval_paraphrase.py \
+    python -m src.evaluation.eval_paraphrase \
         --model_path outputs/stage1/checkpoint-100 \
-        --data_path data/debug/debug.jsonl \
-        --compress_ratio 1
-
-    # Multiple compression ratios for a rate–accuracy curve
-    python scripts/eval_paraphrase.py \
-        --model_path outputs/stage1/checkpoint-100 \
-        --data_path data/debug/debug.jsonl \
-        --compress_ratio 1 2 4 8
+        --data_path data/debug/processed_debug \
+        --compress_ratio 1 2 4
 """
 
 import argparse
-import json
 import sys
 
 import torch
 
 from transformers import AutoModel, TextStreamer
 
+from src.dataset.get_wiki import get_wiki
 from src.evaluation.metrics import Metrics
 from src.models.LatentSeeker.processing_LatentSeeker import LatentSeekerProcessor
 
 
-def load_data(path: str, max_samples: int | None = None) -> list[dict]:
-    """Load jsonl lines with a ``text`` field."""
-    samples = []
-    with open(path) as f:
-        for line in f:
-            samples.append(json.loads(line))
-    if max_samples is not None:
-        samples = samples[:max_samples]
-    return samples
+def _get_ref_text(sample) -> str:
+    """Extract reference text from assistant message."""
+    for msg in sample["messages"]:
+        if msg["role"] == "assistant":
+            for c in msg["content"]:
+                if c.get("type") == "text":
+                    return c["text"].strip()
+    return ""
 
 
 @torch.no_grad()
 def evaluate(
     model,
     processor,
-    samples: list[dict],
+    samples,
     compress_ratio: int | float,
     max_new_tokens: int,
     metrics: Metrics,
-    device: str,
     stream: bool = False,
 ) -> dict:
     """Run paraphrase evaluation at a given ``compress_ratio``."""
@@ -54,18 +46,8 @@ def evaluate(
     ref_ids_list = []
 
     for i, sample in enumerate(samples):
-        text = sample["text"].strip()
-
-        # --- Format messages ---
-        messages = [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "longtext", "longtext": text},
-                    {"type": "text", "text": "Please repeat the longtext above."},
-                ],
-            },
-        ]
+        messages = sample["messages"]
+        ref_text = _get_ref_text(sample)
 
         # --- Tokenize ---
         inputs = processor.apply_chat_template(
@@ -76,7 +58,7 @@ def evaluate(
             return_tensors="pt",
             compress_ratio=compress_ratio,
         )
-        inputs = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in inputs.items()}
+        inputs = {k: v.to(model.device) if isinstance(v, torch.Tensor) else v for k, v in inputs.items()}
 
         # Remap OOB tokens for small vocab debug configs
         vocab_size = model.config.text_config.vocab_size
@@ -105,7 +87,6 @@ def evaluate(
 
         # --- Decode ---
         gen_text = processor.decode(gen_ids, skip_special_tokens=True).strip()
-        ref_text = text
 
         # --- Reference BPE ids (for token_accuracy) ---
         ref_ids = processor.tokenizer.encode(ref_text, add_special_tokens=False)
@@ -146,7 +127,7 @@ def main():
     parser.add_argument("--max_samples", type=int, default=None)
     parser.add_argument("--max_new_tokens", type=int, default=512)
     parser.add_argument("--device", default=None)
-    parser.add_argument("--stream", action="store_true", help="Show token-by-token generation")
+    parser.add_argument("--stream", action="store_true")
     args = parser.parse_args()
 
     device = args.device or ("cuda" if torch.cuda.is_available() else "cpu")
@@ -155,13 +136,15 @@ def main():
     model = AutoModel.from_pretrained(
         args.model_path,
         torch_dtype=torch.bfloat16 if device != "cpu" else torch.float32,
-    ).to(device).eval()
+        device_map=device,
+    ).eval()
 
     processor = LatentSeekerProcessor.from_pretrained(args.model_path)
     metrics = Metrics(tokenizer=processor.tokenizer)
 
-    samples = load_data(args.data_path, args.max_samples)
-    print(f"Loaded {len(samples)} samples from {args.data_path}")
+    print(f"Loading data from {args.data_path} ...")
+    samples = get_wiki(args.data_path, max_samples=args.max_samples)
+    print(f"Loaded {len(samples)} samples")
 
     print(f"\n{'='*60}")
     print(f"{'compress_ratio':>14}  {'token_acc':>10}  {'BLEU':>8}")
@@ -169,7 +152,7 @@ def main():
 
     for cr in args.compress_ratio:
         result = evaluate(
-            model, processor, samples, cr, args.max_new_tokens, metrics, device,
+            model, processor, samples, cr, args.max_new_tokens, metrics,
             stream=args.stream,
         )
         print(f"{'='*60}")
