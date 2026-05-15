@@ -49,3 +49,4 @@ model_config:
   longtext_config:
     vocab_size: 10
     num_hidden_layers: 3
+    svd_loss_weight: 0.01

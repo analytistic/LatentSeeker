@@ -13,13 +13,15 @@ class LatentEncoderConfig(Qwen3VLTextConfig):
         compress_ratio=10,
         num_hidden_layers = 3,
         vocab_size = 10,
-        deepstack_latent_indexes=[8, 16, 24],
+        deepstack_latent_indexes=[0, 1, 2],
+        svd_loss_weight=0.01,
         **kwargs,
     ):
         super().__init__(**kwargs, vocab_size=vocab_size, num_hidden_layers=num_hidden_layers)
-        self.deepstack_visual_indexes = deepstack_latent_indexes
+        self.deepstack_latent_indexes = deepstack_latent_indexes
         self.query_num = query_num
         self.compress_ratio = compress_ratio
+        self.svd_loss_weight = svd_loss_weight
         
 
 class LatentSeekerConfig(PreTrainedConfig):

@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from typing import List
 from collections.abc import Callable
 
@@ -10,6 +11,7 @@ from transformers.activations import ACT2FN
 from transformers.cache_utils import Cache
 from transformers.modeling_flash_attention_utils import FlashAttentionKwargs
 from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast
+from transformers.utils import ModelOutput
 from transformers.utils.generic import TransformersKwargs, is_flash_attention_requested
 from transformers.processing_utils import Unpack
 from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS                                             
@@ -28,46 +30,216 @@ from transformers.models.qwen3_vl.modeling_qwen3_vl import (
 from .configuration_LatentSeeker import LatentSeekerConfig, LatentEncoderConfig
 
 
+class LatentSeekerTextModel(Qwen3VLTextModel):
+    """Qwen3VLTextModel with an additional longtext deepstack injection path.
+
+    Injects longtext deepstack features at the first N decoder layers,
+    parallel to the existing visual deepstack path.
+    """
+
+    def forward(
+        self,
+        input_ids: torch.LongTensor | None = None,
+        attention_mask: torch.Tensor | None = None,
+        position_ids: torch.LongTensor | None = None,
+        past_key_values: Cache | None = None,
+        inputs_embeds: torch.FloatTensor | None = None,
+        use_cache: bool | None = None,
+        cache_position: torch.LongTensor | None = None,
+        # visual deepstack
+        visual_pos_masks: torch.Tensor | None = None,
+        deepstack_visual_embeds: list[torch.Tensor] | None = None,
+        # longtext deepstack
+        longtext_pos_masks: torch.Tensor | None = None,
+        deepstack_longtext_embeds: list[torch.Tensor] | None = None,
+        **kwargs: Unpack[FlashAttentionKwargs],
+    ) -> tuple | BaseModelOutputWithPast:
+        from transformers.cache_utils import DynamicCache
+        from transformers.models.qwen3_vl.modeling_qwen3_vl import create_causal_mask
+
+        if (input_ids is None) ^ (inputs_embeds is not None):
+            raise ValueError("You must specify exactly one of input_ids or inputs_embeds")
+
+        if use_cache and past_key_values is None and not torch.jit.is_tracing():
+            past_key_values = DynamicCache(config=self.config)
+
+        if inputs_embeds is None:
+            inputs_embeds = self.embed_tokens(input_ids)
+
+        if cache_position is None:
+            past_seen_tokens = past_key_values.get_seq_length() if past_key_values is not None else 0
+            cache_position = torch.arange(
+                past_seen_tokens, past_seen_tokens + inputs_embeds.shape[1], device=inputs_embeds.device
+            )
+
+        if position_ids is None:
+            position_ids = cache_position.view(1, 1, -1).expand(4, inputs_embeds.shape[0], -1)
+        elif position_ids.ndim == 2:
+            position_ids = position_ids[None, ...].expand(4, position_ids.shape[0], -1)
+
+        if position_ids.ndim == 3 and position_ids.shape[0] == 4:
+            text_position_ids = position_ids[0]
+            position_ids = position_ids[1:]
+        else:
+            text_position_ids = None
+
+        attention_mask = create_causal_mask(
+            config=self.config,
+            inputs_embeds=inputs_embeds,
+            attention_mask=attention_mask,
+            cache_position=cache_position,
+            past_key_values=past_key_values,
+            position_ids=text_position_ids,
+        )
+
+        hidden_states = inputs_embeds
+        position_embeddings = self.rotary_emb(hidden_states, position_ids)
+
+        for layer_idx, decoder_layer in enumerate(self.layers):
+            hidden_states = decoder_layer(
+                hidden_states,
+                attention_mask=attention_mask,
+                position_ids=text_position_ids,
+                past_key_values=past_key_values,
+                cache_position=cache_position,
+                position_embeddings=position_embeddings,
+                **kwargs,
+            )
+
+            if deepstack_visual_embeds is not None and layer_idx in range(len(deepstack_visual_embeds)):
+                hidden_states = self._deepstack_process(
+                    hidden_states, visual_pos_masks, deepstack_visual_embeds[layer_idx],
+                )
+
+            if deepstack_longtext_embeds is not None and layer_idx in range(len(deepstack_longtext_embeds)):
+                hidden_states = self._longtext_deepstack_process(
+                    hidden_states, longtext_pos_masks, deepstack_longtext_embeds[layer_idx],
+                )
+
+        hidden_states = self.norm(hidden_states)
+
+        return BaseModelOutputWithPast(
+            last_hidden_state=hidden_states,
+            past_key_values=past_key_values,
+        )
+
+    def _longtext_deepstack_process(
+        self, hidden_states: torch.Tensor, pos_masks: torch.Tensor, embed: torch.Tensor
+    ) -> torch.Tensor:
+        pos_masks = pos_masks.to(hidden_states.device)
+        embed = embed.to(hidden_states.device, hidden_states.dtype)
+        hidden_states = hidden_states.clone()
+        local_this = hidden_states[pos_masks, :] + embed
+        hidden_states[pos_masks, :] = local_this
+        return hidden_states
+
+
+@dataclass
+class MergerOutput(ModelOutput):
+    """
+    Output of LongertextMerger.
+
+    Args:
+        pooled (`torch.FloatTensor` of shape `(total_num_tokens, hidden_size)`):
+            Compressed latent tokens after gated pooling.
+        svd_loss (`torch.FloatTensor`, *optional*):
+            SVD reconstruction loss, ``None`` if no tokens to compress.
+    """
+    pooled: torch.FloatTensor
+    svd_loss: torch.FloatTensor | None = None
+
+
 class LongertextMerger(nn.Module):
+    """Merger with learned gated pooling + SVD reconstruction loss.
+
+    Instead of uniform average, each token gets a learned weight via a linear gate.
+    A SVD auxiliary loss constrains the compression to retain maximal information.
+    """
+
     def __init__(self, config):
         super().__init__()
         self.config = config
-        self.mlp = LatentSeekerEncoderMLP(config)
+        self.gate = nn.Linear(config.hidden_size, 1, bias=False)
+        self.mlp = LatentSeekerEncoderMLP(config)  # kept for potential future use
 
-    def forward(self, longtext_embeds: torch.Tensor, longtext_cu_seqlens: torch.Tensor, longtext_num_tokens: list[int]) -> torch.Tensor:
+    def forward(self, longtext_embeds: torch.Tensor, longtext_cu_seqlens: torch.Tensor,
+                longtext_num_tokens: list[int]) -> MergerOutput:
         device = longtext_embeds.device
         num_docs = len(longtext_num_tokens)
         total_output = sum(longtext_num_tokens)
         if total_output == 0:
-            return torch.zeros(0, longtext_embeds.shape[-1], device=device, dtype=longtext_embeds.dtype)
+            return MergerOutput(
+                pooled=torch.zeros(0, longtext_embeds.shape[-1], device=device, dtype=longtext_embeds.dtype),
+            )
 
         # Build output cumulative offsets: [0, q0, q0+q1, ...]
         out_cu = [0]
         for n in longtext_num_tokens:
             out_cu.append(out_cu[-1] + n)
 
-        # Map each input token to its target output index
+        # Map each input token to its target output index, with overlap
         pool_indices = []
+        embed_extra_idx = []
         for i in range(num_docs):
             seg_len = longtext_cu_seqlens[i + 1] - longtext_cu_seqlens[i]
             target = longtext_num_tokens[i]
             if seg_len == 0 or target == 0:
                 continue
-            # Each of the seg_len tokens maps to one of target output positions
-            indices = torch.arange(seg_len, device=device) * target // seg_len + out_cu[i]
-            pool_indices.append(indices)
+            offset = out_cu[i]
+
+            main = torch.arange(seg_len, device=device) * target // seg_len + offset
+            pool_indices.append(main)
+
+            # Overlap: first ~ratio/2 tokens of each bin also map to previous bin
+            if target > 1:
+                stride = seg_len / target
+                overlap_len = max(1, int(stride / 2))
+                for b in range(1, target):
+                    bin_mask = (main - offset) == b
+                    positions = torch.where(bin_mask)[0]
+                    if len(positions) == 0:
+                        continue
+                    overlap_positions = positions[:overlap_len]
+                    if len(overlap_positions) > 0:
+                        pool_indices.append(torch.full(
+                            (len(overlap_positions),), b - 1 + offset, device=device
+                        ))
+                        embed_extra_idx.append(overlap_positions)
+
         pool_indices = torch.cat(pool_indices, dim=0)
 
-        # Parallel sum into target positions
+        # Duplicate embedding entries for overlapped positions
+        if embed_extra_idx:
+            extra_idx = torch.cat(embed_extra_idx)
+            longtext_embeds = torch.cat([longtext_embeds, longtext_embeds[extra_idx]], dim=0)
+
+        # Learned gate: each token gets a score
+        gate_scores = self.gate(longtext_embeds).squeeze(-1)  # [N]
+
+        # Softmax weights within each bin
+ max_score = gate_scores.max()
+        gate_scores_exp = (gate_scores - max_score).exp()  # [N]
+        weight_sum = torch.zeros(total_output, device=device, dtype=longtext_embeds.dtype)
+        weight_sum.index_add_(0, pool_indices, gate_scores_exp)
+        weights = gate_scores_exp / weight_sum[pool_indices].clamp(min=1e-8)  # [N]
+
+        # Weighted sum into target positions
+        weighted = weights.unsqueeze(-1) * longtext_embeds  # [N, D]
         summed = torch.zeros(total_output, longtext_embeds.shape[-1], device=device, dtype=longtext_embeds.dtype)
-        summed.index_add_(0, pool_indices, longtext_embeds)
+        summed.index_add_(0, pool_indices, weighted)
 
-        # Count tokens per bin and average
-        counts = torch.zeros(total_output, device=device, dtype=longtext_embeds.dtype)
-        counts.index_add_(0, pool_indices, torch.ones(longtext_embeds.shape[0], device=device, dtype=longtext_embeds.dtype))
+        # SVD reconstruction loss: c must be able to reconstruct original tokens
+        pooled = summed  # weighted sum (weights already normalized per bin)
 
-        pooled = summed / counts.unsqueeze(-1).clamp(min=1)
-        return pooled  # TODO: re-enable self.mlp(pooled) once Ascend NPU init issue is fixed
+        # Compute svd_loss: ||x - αc||² where α = (x·c) / ||c||²
+ c_expanded = pooled[pool_indices]
+        dot = (longtext_embeds * c_expanded).sum(dim=-1, keepdim=True)
+ c_norm_sq = (pooled * pooled).sum(dim=-1, keepdim=True)
+        alpha = dot / c_norm_sq[pool_indices].clamp(min=1e-8)
+        recon = alpha * c_expanded
+        svd_loss = F.mse_loss(recon, longtext_embeds)
+
+        return MergerOutput(pooled=pooled, svd_loss=svd_loss)
 
 
 class LatentSeekerEncoderMLP(nn.Module):
@@ -300,6 +472,7 @@ class LatentSeekerEncoderModel(LatentSeekerPreTrainedModel):
         if longtext_embeds.shape[0] == 0:
             return BaseModelOutputWithDeepstackFeatures()
 
+        deepstack_features = []
         for layer_num, blk in enumerate(self.layers):
             longtext_embeds: torch.FloatTensor = blk(
                 longtext_embeds,
@@ -307,13 +480,17 @@ class LatentSeekerEncoderModel(LatentSeekerPreTrainedModel):
                 position_embeddings=position_embeddings,
             )
 
-        pooler_output: torch.FloatTensor = self.merger(longtext_embeds, longtext_cu_seqlens, longtext_num_tokens)
-        deepstack_features = [pooler_output]
+            if layer_num in self.config.deepstack_latent_indexes:
+                merger_out = self.merger(longtext_embeds, longtext_cu_seqlens, longtext_num_tokens)
+                deepstack_features.append(merger_out.pooled)
+
+        pooler_output = deepstack_features[-1] if deepstack_features else None
 
         return BaseModelOutputWithDeepstackFeatures(
             last_hidden_state=longtext_embeds,
             pooler_output=pooler_output,
-            deepstack_features=deepstack_features
+            deepstack_features=deepstack_features,
+            loss=merger_out.svd_loss if deepstack_features else None,
         )
     
 
@@ -328,7 +505,7 @@ class LatentSeekerModel(LatentSeekerPreTrainedModel):
     def __init__(self, config: LatentSeekerConfig):
         super().__init__(config)
         self.longtext = LatentSeekerEncoderModel._from_config(config.longtext_config)
-        self.language_model = Qwen3VLTextModel._from_config(config.text_config)
+        self.language_model = LatentSeekerTextModel._from_config(config.text_config)
         self.rope_deltas = None
         self.post_init()
 
@@ -364,14 +541,19 @@ class LatentSeekerModel(LatentSeekerPreTrainedModel):
             inputs_embeds = self.language_model.get_input_embeddings()(input_ids)
 
         # 1. Encode longtext into latents and replace placeholders
+        svd_loss = None
+        deepstack_features = None
+        longtext_mask = None
         if longtext_input_ids is not None:
             longtext_outputs = self.longtext(
                 longtext_input_ids,
                 longtext_cu_seqlens=longtext_cu_seqlens,
                 longtext_num_tokens=longtext_num_tokens,
             )
-            longtext_embeds = longtext_outputs.pooler_output  
-            
+            longtext_embeds = longtext_outputs.pooler_output
+            svd_loss = getattr(longtext_outputs, "loss", None)
+            deepstack_features = getattr(longtext_outputs, "deepstack_features", None)
+
             # get_placeholder_mask
             longtext_token_id = self.config.longtext_token_id
             longtext_mask = input_ids == longtext_token_id
@@ -385,7 +567,7 @@ class LatentSeekerModel(LatentSeekerPreTrainedModel):
             longtext_mask_3d = longtext_mask.unsqueeze(-1).expand_as(inputs_embeds)
             inputs_embeds = inputs_embeds.masked_scatter(longtext_mask_3d, longtext_embeds)
 
-        # 2. Text model forward
+        # 2. Text model forward (with deepstack injection if applicable)
         outputs = self.language_model(
             input_ids=None,
             attention_mask=attention_mask,
@@ -394,8 +576,13 @@ class LatentSeekerModel(LatentSeekerPreTrainedModel):
             inputs_embeds=inputs_embeds,
             use_cache=use_cache,
             cache_position=cache_position,
+            longtext_pos_masks=longtext_mask,
+            deepstack_longtext_embeds=deepstack_features,
             **kwargs,
         )
+
+        if svd_loss is not None:
+            outputs.loss = svd_loss
 
         return outputs
 
@@ -521,6 +708,11 @@ class LatentSeekerForConditionalGeneration(LatentSeekerPreTrainedModel, Generati
         if labels is not None:
             loss = self.loss_function(logits=logits, labels=labels, vocab_size=self.config.text_config.vocab_size)
 
+        # Add SVD auxiliary loss from the encoder merger
+        svd_loss = getattr(outputs, "loss", None)
+        if loss is not None and svd_loss is not None:
+            weight = getattr(self.config.longtext_config, "svd_loss_weight", 0.01)
+            loss = loss + weight * svd_loss
 
         return CausalLMOutputWithPast(
             loss=loss,
@@ -617,4 +809,4 @@ class LatentSeekerForConditionalGeneration(LatentSeekerPreTrainedModel, Generati
     
 
 
-__all__ = ["LatentSeekerEncoderModel", "LatentSeekerModel", "LatentSeekerForConditionalGeneration"]
+__all__ = ["LatentSeekerTextModel", "LatentSeekerEncoderModel", "LatentSeekerModel", "LatentSeekerForConditionalGeneration"]
