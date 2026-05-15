@@ -119,6 +119,8 @@ def train(config_path: str | None = None):
         compress_stages=train_args.compress_stages,
     )
 
+    import torch
+    torch.autograd.set_detect_anomaly(True)
     trainer.train(resume_from_checkpoint=resume_from_checkpoint)
 
 

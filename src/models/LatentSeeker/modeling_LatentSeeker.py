@@ -226,27 +226,28 @@ class LongertextMerger(nn.Module):
             longtext_embeds = torch.cat([longtext_embeds, longtext_embeds[extra_idx]], dim=0)
 
         # Learned gate: each token gets a score
-        gate_scores = self.gate(longtext_embeds).squeeze(-1)  # [N]
+        gate_scores = self.gate(longtext_embeds).squeeze(-1).to(longtext_embeds.dtype)  # [N]
 
         # Softmax weights within each bin
         max_score = gate_scores.max()
-        gate_scores_exp = (gate_scores - max_score).exp()  # [N]
+        gate_scores_exp = (gate_scores - max_score).exp().to(longtext_embeds.dtype)  # [N]
         weight_sum = torch.zeros(total_output, device=device, dtype=longtext_embeds.dtype)
-        weight_sum.index_add_(0, pool_indices, gate_scores_exp)
+        weight_sum = torch.index_add(weight_sum, 0, pool_indices, gate_scores_exp)
         weights = gate_scores_exp / weight_sum[pool_indices].clamp(min=1e-8)  # [N]
 
         # Weighted sum into target positions
         weighted = weights.unsqueeze(-1) * longtext_embeds  # [N, D]
         summed = torch.zeros(total_output, longtext_embeds.shape[-1], device=device, dtype=longtext_embeds.dtype)
-        summed.index_add_(0, pool_indices, weighted)
+        summed = torch.index_add(summed, 0, pool_indices, weighted)
 
         # SVD reconstruction loss: c must be able to reconstruct original tokens
         pooled = summed  # weighted sum (weights already normalized per bin)
 
-        # Compute svd_loss: ||x - αc||² where α = (x·c) / ||c||²
-        c_expanded = pooled[pool_indices]
+        # Clone for SVD path to isolate from LM gradient path
+        svd_pooled = pooled.clone()
+        c_expanded = svd_pooled[pool_indices]
         dot = (longtext_embeds * c_expanded).sum(dim=-1, keepdim=True)
-        c_norm_sq = (pooled * pooled).sum(dim=-1, keepdim=True)
+        c_norm_sq = (svd_pooled * svd_pooled).sum(dim=-1, keepdim=True)
         alpha = dot / c_norm_sq[pool_indices].clamp(min=1e-8)
         recon = alpha * c_expanded
         svd_loss = F.mse_loss(recon, longtext_embeds)
@@ -453,6 +454,7 @@ class LatentSeekerEncoderModel(LatentSeekerPreTrainedModel):
         self.deepstack_merger_list = nn.ModuleList([
             LongertextMerger(config) for _ in range(len(config.deepstack_latent_indexes))
         ])
+        self.pool_merger = LongertextMerger(config)
         self.norm = Qwen3VLTextRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.rotary_emb = Qwen3VLTextRotaryEmbedding(config=config)
         self.gradient_checkpointing = False
@@ -504,11 +506,12 @@ class LatentSeekerEncoderModel(LatentSeekerPreTrainedModel):
                 if merger_out.svd_loss is not None:
                     svd_loss = merger_out.svd_loss if svd_loss is None else svd_loss + merger_out.svd_loss
 
-        pooler_output = deepstack_features[-1] if deepstack_features else None
+        last_merger_out = self.pool_merger(longtext_embeds, longtext_cu_seqlens, longtext_num_tokens)
+        svd_loss = last_merger_out.svd_loss if svd_loss is None else svd_loss + last_merger_out.svd_loss
 
         return LatentSeekerEncoderOutput(
             last_hidden_state=longtext_embeds,
-            pooler_output=pooler_output,
+            pooler_output=last_merger_out.pooled,
             deepstack_features=deepstack_features,
             loss=svd_loss,
         )
@@ -602,7 +605,7 @@ class LatentSeekerModel(LatentSeekerPreTrainedModel):
         )
 
         if svd_loss is not None:
-            outputs.loss = svd_loss
+            outputs.svd_loss = svd_loss
 
         return outputs
 
@@ -729,7 +732,7 @@ class LatentSeekerForConditionalGeneration(LatentSeekerPreTrainedModel, Generati
             loss = self.loss_function(logits=logits, labels=labels, vocab_size=self.config.text_config.vocab_size)
 
         # Add SVD auxiliary loss from the encoder merger
-        svd_loss = getattr(outputs, "loss", None)
+        svd_loss = getattr(outputs, "svd_loss", None)
         if loss is not None and svd_loss is not None:
             weight = getattr(self.config.longtext_config, "svd_loss_weight", 0.01)
             loss = loss + weight * svd_loss

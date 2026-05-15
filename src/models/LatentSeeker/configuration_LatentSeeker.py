@@ -13,7 +13,7 @@ class LatentEncoderConfig(Qwen3VLTextConfig):
         compress_ratio=10,
         num_hidden_layers = 3,
         vocab_size = 10,
-        deepstack_latent_indexes=[0, 1, 2],
+        deepstack_latent_indexes=[0, 1],
         svd_loss_weight=0.01,
         **kwargs,
     ):
