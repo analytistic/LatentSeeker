@@ -1,0 +1,16 @@
+[project]
+name = "opd"
+version = "0.1.0"
+description = "On-Policy Distillation framework for LLMs"
+requires-python = ">=3.10"
+dependencies = [
+    "torch>=2.0",
+    "transformers",
+]
+
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
