@@ -217,7 +217,7 @@ class LongertextMerger(nn.Module):
         gate_scores = self.gate(longtext_embeds).squeeze(-1)  # [N]
 
         # Softmax weights within each bin
- max_score = gate_scores.max()
+        max_score = gate_scores.max()
         gate_scores_exp = (gate_scores - max_score).exp()  # [N]
         weight_sum = torch.zeros(total_output, device=device, dtype=longtext_embeds.dtype)
         weight_sum.index_add_(0, pool_indices, gate_scores_exp)
@@ -232,9 +232,9 @@ class LongertextMerger(nn.Module):
         pooled = summed  # weighted sum (weights already normalized per bin)
 
         # Compute svd_loss: ||x - αc||² where α = (x·c) / ||c||²
- c_expanded = pooled[pool_indices]
+        c_expanded = pooled[pool_indices]
         dot = (longtext_embeds * c_expanded).sum(dim=-1, keepdim=True)
- c_norm_sq = (pooled * pooled).sum(dim=-1, keepdim=True)
+        c_norm_sq = (pooled * pooled).sum(dim=-1, keepdim=True)
         alpha = dot / c_norm_sq[pool_indices].clamp(min=1e-8)
         recon = alpha * c_expanded
         svd_loss = F.mse_loss(recon, longtext_embeds)
