@@ -30,6 +30,18 @@ from transformers.models.qwen3_vl.modeling_qwen3_vl import (
 from .configuration_LatentSeeker import LatentSeekerConfig, LatentEncoderConfig
 
 
+@dataclass
+class LatentSeekerEncoderOutput(BaseModelOutputWithDeepstackFeatures):
+    """Encoder output that includes SVD reconstruction loss."""
+    loss: torch.FloatTensor | None = None
+
+
+@dataclass
+class LatentSeekerCausalLMOutput(CausalLMOutputWithPast):
+    """LM output with separate SVD loss field for trainer logging."""
+    svd_loss: torch.FloatTensor | None = None
+
+
 class LatentSeekerTextModel(Qwen3VLTextModel):
     """Qwen3VLTextModel with an additional longtext deepstack injection path.
 
@@ -438,7 +450,9 @@ class LatentSeekerEncoderModel(LatentSeekerPreTrainedModel):
             LongtextEncoderLayer(config, layer_idx=i)
             for i in range(config.num_hidden_layers)
         ])
-        self.merger = LongertextMerger(config)
+        self.deepstack_merger_list = nn.ModuleList([
+            LongertextMerger(config) for _ in range(len(config.deepstack_latent_indexes))
+        ])
         self.norm = Qwen3VLTextRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.rotary_emb = Qwen3VLTextRotaryEmbedding(config=config)
         self.gradient_checkpointing = False
@@ -458,7 +472,7 @@ class LatentSeekerEncoderModel(LatentSeekerPreTrainedModel):
         longtext_cu_seqlens: list[int] | None = None,
         longtext_num_tokens: list[int] | None = None,
         **kwargs,
-    ) -> BaseModelOutputWithDeepstackFeatures:
+    ) -> LatentSeekerEncoderOutput:
         if isinstance(longtext_input_ids, (list, tuple)):
             device = next(self.parameters()).device
             longtext_input_ids = torch.tensor(longtext_input_ids, dtype=torch.long, device=device)
@@ -470,9 +484,10 @@ class LatentSeekerEncoderModel(LatentSeekerPreTrainedModel):
 
     
         if longtext_embeds.shape[0] == 0:
-            return BaseModelOutputWithDeepstackFeatures()
+            return LatentSeekerEncoderOutput()
 
         deepstack_features = []
+        svd_loss = None
         for layer_num, blk in enumerate(self.layers):
             longtext_embeds: torch.FloatTensor = blk(
                 longtext_embeds,
@@ -481,16 +496,21 @@ class LatentSeekerEncoderModel(LatentSeekerPreTrainedModel):
             )
 
             if layer_num in self.config.deepstack_latent_indexes:
-                merger_out = self.merger(longtext_embeds, longtext_cu_seqlens, longtext_num_tokens)
+                merger_idx = self.config.deepstack_latent_indexes.index(layer_num)
+                merger_out = self.deepstack_merger_list[merger_idx](
+                    longtext_embeds, longtext_cu_seqlens, longtext_num_tokens
+                )
                 deepstack_features.append(merger_out.pooled)
+                if merger_out.svd_loss is not None:
+                    svd_loss = merger_out.svd_loss if svd_loss is None else svd_loss + merger_out.svd_loss
 
         pooler_output = deepstack_features[-1] if deepstack_features else None
 
-        return BaseModelOutputWithDeepstackFeatures(
+        return LatentSeekerEncoderOutput(
             last_hidden_state=longtext_embeds,
             pooler_output=pooler_output,
             deepstack_features=deepstack_features,
-            loss=merger_out.svd_loss if deepstack_features else None,
+            loss=svd_loss,
         )
     
 
@@ -714,12 +734,13 @@ class LatentSeekerForConditionalGeneration(LatentSeekerPreTrainedModel, Generati
             weight = getattr(self.config.longtext_config, "svd_loss_weight", 0.01)
             loss = loss + weight * svd_loss
 
-        return CausalLMOutputWithPast(
+        return LatentSeekerCausalLMOutput(
             loss=loss,
             logits=logits,
             past_key_values=outputs.past_key_values,
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
+            svd_loss=svd_loss,
         )
 
     def prepare_inputs_for_generation(
