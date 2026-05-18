@@ -21,6 +21,9 @@ Thumbs.db
 .env
 .env.local
 
+# Submodule (only used on opd branch)
+opd/
+
 # Data & model outputs
 data/
 
