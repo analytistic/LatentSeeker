@@ -335,7 +335,7 @@ def process_doc(
         if msgs is None:
             continue
         candidate_total = len(
-            tokenizer.apply_chat_template(msgs, tokenize=True, add_generation_prompt=False)
+            tokenizer.apply_chat_template(msgs, tokenize=True, add_generation_prompt=False)["input_ids"]
         )
         # 6. If budget exceeded: keep this turn in messages but stop
         if candidate_total > budget_tokens:
