@@ -147,9 +147,13 @@ TURN_RE = re.compile(
     re.DOTALL,
 )
 
+_THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
+
 
 def parse_one_turn(text: str) -> dict[str, str] | None:
-    m = TURN_RE.search(text)
+    # Strip think blocks first: the model may emit chain-of-thought
+    cleaned = _THINK_RE.sub("", text).strip()
+    m = TURN_RE.search(cleaned)
     if not m:
         return None
     return {
