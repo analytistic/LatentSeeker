@@ -58,22 +58,23 @@ def main() -> None:
     if args.max_samples:
         ds = ds.select(range(args.max_samples))
 
-    if args.max_turns is not None:
+    # Keep only messages & num_turns, re-infer schema (like wiki's remove_columns)
+    keep_cols = ["messages", "num_turns"]
 
-        def _truncate(ex, idx):
+    def _process(ex, idx):
+        if args.max_turns is not None:
             nt = ex.get("num_turns")
-            if nt is None:
-                return ex
-            ex["messages"] = truncate_by_turns(
-                ex["messages"], nt, args.max_turns
-            )
-            ex["num_turns"] = min(nt, args.max_turns)
-            return ex
+            if nt is not None:
+                return {
+                    "messages": truncate_by_turns(
+                        ex["messages"], nt, args.max_turns
+                    ),
+                    "num_turns": min(nt, args.max_turns),
+                }
+        return {k: ex[k] for k in keep_cols}
 
-        ds = ds.map(_truncate, with_indices=True)
+    ds = ds.map(_process, remove_columns=ds.column_names, with_indices=True)
 
-    # Keep messages and updated num_turns
-    ds = ds.select_columns(["messages", "num_turns"])
     ds.save_to_disk(args.output)
     print(f"Saved {len(ds)} samples to {args.output}")
 
