@@ -9,7 +9,7 @@ datasets:
     path: data/wiki/processed_wiki
     weight: 0.5
   qa:
-    path: data/wiki/processed_qa
+    path: data/wiki/processed_gen_qa
     weight: 0.5
 
 per_device_train_batch_size: 2
