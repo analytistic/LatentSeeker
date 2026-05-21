@@ -102,12 +102,12 @@ def _load_datasets(data_args: DataArgs):
             datasets[name] = ds
             weights[name] = weight
 
-        combined, lengths = get_weighted_mixer(datasets)
-        return combined, lengths, weights
+        combined, lengths, names = get_weighted_mixer(datasets)
+        return combined, lengths, weights, names
 
     # Fallback: single dataset
     dataset = get_wiki(data_args.data_path, max_samples=data_args.max_samples)
-    return dataset, None, None
+    return dataset, None, None, None
 
 
 def train(config_path: str | None = None):
@@ -147,7 +147,7 @@ def train(config_path: str | None = None):
 
     apply_freeze(model, train_args.freeze_modules)
 
-    dataset, dataset_lengths, dataset_weights = _load_datasets(data_args)
+    dataset, dataset_lengths, dataset_weights, dataset_names = _load_datasets(data_args)
 
     trainer = build_trainer(
         model=model,
@@ -157,6 +157,7 @@ def train(config_path: str | None = None):
         compress_stages=train_args.compress_stages,
         dataset_lengths=dataset_lengths,
         dataset_weights=dataset_weights,
+        dataset_names=dataset_names,
     )
 
     trainer.train(resume_from_checkpoint=resume_from_checkpoint)

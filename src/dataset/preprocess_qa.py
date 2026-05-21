@@ -15,7 +15,8 @@ from __future__ import annotations
 
 import argparse
 
-from datasets import load_dataset
+from datasets import load_dataset, Features
+from datasets.features import Sequence, Json, Value
 
 
 def truncate_by_turns(messages: list, num_turns: int, max_turns: int) -> list:
@@ -58,22 +59,29 @@ def main() -> None:
     if args.max_samples:
         ds = ds.select(range(args.max_samples))
 
-    # Keep only messages & num_turns, re-infer schema (like wiki's remove_columns)
-    keep_cols = ["messages", "num_turns"]
+    if args.max_turns is not None:
 
-    def _process(ex, idx):
-        if args.max_turns is not None:
+        def _truncate(ex, idx):
             nt = ex.get("num_turns")
-            if nt is not None:
-                return {
-                    "messages": truncate_by_turns(
-                        ex["messages"], nt, args.max_turns
-                    ),
-                    "num_turns": min(nt, args.max_turns),
-                }
-        return {k: ex[k] for k in keep_cols}
+            if nt is None:
+                return ex
+            ex["messages"] = truncate_by_turns(
+                ex["messages"], nt, args.max_turns
+            )
+            ex["num_turns"] = min(nt, args.max_turns)
+            return ex
 
-    ds = ds.map(_process, remove_columns=ds.column_names, with_indices=True)
+        ds = ds.map(_truncate, with_indices=True)
+
+    # Keep only needed columns, force List(Json) for schema consistency
+    ds = ds.map(
+        lambda ex: {"messages": ex["messages"], "num_turns": ex["num_turns"]},
+        remove_columns=ds.column_names,
+        features=Features({
+            "messages": Sequence(Json(decode=True)),
+            "num_turns": Value("int64"),
+        }),
+    )
 
     ds.save_to_disk(args.output)
     print(f"Saved {len(ds)} samples to {args.output}")

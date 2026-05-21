@@ -18,6 +18,7 @@ def build_trainer(
     compress_stages: list[tuple[float, int]] | None = None,
     dataset_lengths: dict[str, int] | None = None,
     dataset_weights: dict[str, float] | None = None,
+    dataset_names: list[str] | None = None,
 ) -> Trainer:
     """Build a Trainer with LatentSeeker-specific collator and callbacks.
 
@@ -45,6 +46,7 @@ def build_trainer(
     if dataset_lengths:
         kwargs["dataset_lengths"] = dataset_lengths
         kwargs["dataset_weights"] = dataset_weights or {}
+        kwargs["dataset_names"] = dataset_names or []
 
     trainer = trainer_cls(
         model=model,

@@ -16,18 +16,28 @@ class BalancedMultiTaskSampler(Sampler[int]):
     3. For each dataset: randomly draw ``ceil(total_size * weight)`` samples
        (without replacement when possible, with replacement otherwise).
     4. Concatenate all drawn indices into one list, shuffle once, iterate.
+
+    Args:
+        dataset_lengths: Per-dataset sample counts.
+        dataset_weights: Per-dataset sampling weights.
+        dataset_names: Ordered list of dataset names, matching the
+            concatenation order in ``get_weighted_mixer``. Used to compute
+            offsets so they stay in sync with the combined dataset.
     """
 
     def __init__(
         self,
         dataset_lengths: dict[str, int],
         dataset_weights: dict[str, float],
+        dataset_names: list[str] | None = None,
     ):
         self.dataset_lengths = dataset_lengths
         self.dataset_weights = dataset_weights
 
-        # Pre-compute per-dataset offsets in the concatenated dataset
-        names = list(dataset_lengths.keys())
+        # Pre-compute per-dataset offsets in the concatenated dataset.
+        # Use explicit order (from get_weighted_mixer) instead of dict
+        # insertion order to guarantee sync with the combined dataset.
+        names = dataset_names or list(dataset_lengths.keys())
         self.offsets: dict[str, int] = {}
         cum = 0
         for name in names:
@@ -79,10 +89,13 @@ class WeightedMultiTaskTrainer(Trainer):
         )
     """
 
-    def __init__(self, *, dataset_lengths: dict[str, int], dataset_weights: dict[str, float], **kwargs):
+    def __init__(self, *, dataset_lengths: dict[str, int], dataset_weights: dict[str, float], dataset_names: list[str] | None = None, **kwargs):
         super().__init__(**kwargs)
         self.dataset_lengths = dataset_lengths
         self.dataset_weights = dataset_weights
+        self.dataset_names = dataset_names
 
     def _get_train_sampler(self, train_dataset=None):
-        return BalancedMultiTaskSampler(self.dataset_lengths, self.dataset_weights)
+        return BalancedMultiTaskSampler(
+            self.dataset_lengths, self.dataset_weights, self.dataset_names
+        )

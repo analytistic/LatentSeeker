@@ -1,5 +1,6 @@
 """Preprocess wiki JSONL → mapped Arrow dataset (single process, run once)."""
-from datasets import load_dataset
+from datasets import load_dataset, Features
+from datasets.features import Sequence, Json
 
 
 def get_repeat_data(example):
@@ -32,7 +33,11 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     dataset = load_dataset("json", data_files=args.input, split="train")
-    dataset = dataset.map(get_repeat_data, remove_columns=dataset.column_names)
+    dataset = dataset.map(
+        get_repeat_data,
+        remove_columns=dataset.column_names,
+        features=Features({"messages": Sequence(Json(decode=True))}),
+    )
     dataset = dataset.filter(lambda x: x["messages"] is not None)
     dataset.save_to_disk(args.output)
     print(f"Saved {len(dataset)} samples to {args.output}")
