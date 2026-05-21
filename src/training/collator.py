@@ -44,6 +44,7 @@ class DynamicCompressCollator:
             compress_ratio=self.compress_ratio,
             return_tensors="pt",
             padding=True,
+            multi_turn_reasoning=True,
         )
 
         # Remap OOB tokens for small vocab debug configs

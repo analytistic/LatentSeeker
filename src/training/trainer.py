@@ -6,6 +6,7 @@ from transformers import Trainer, TrainingArguments
 
 from .callback import CurriculumCallback
 from .collator import DynamicCompressCollator
+from .weighted_trainer import WeightedMultiTaskTrainer
 
 
 def build_trainer(
@@ -15,6 +16,8 @@ def build_trainer(
     eval_dataset: Any = None,
     args: TrainingArguments | None = None,
     compress_stages: list[tuple[float, int]] | None = None,
+    dataset_lengths: dict[str, int] | None = None,
+    dataset_weights: dict[str, float] | None = None,
 ) -> Trainer:
     """Build a Trainer with LatentSeeker-specific collator and callbacks.
 
@@ -24,6 +27,9 @@ def build_trainer(
         train_dataset: Dataset with "messages" column.
         compress_stages: Curriculum stages [(progress, compress_ratio), ...].
             If None, compress_ratio defaults to 8 throughout training.
+        dataset_lengths: Per-dataset lengths for weighted sampling.
+        dataset_weights: Per-dataset sampling weights.
+            If provided, uses WeightedMultiTaskTrainer instead of Trainer.
     """
     collator = DynamicCompressCollator(
         processor=processor,
@@ -34,7 +40,13 @@ def build_trainer(
     if compress_stages:
         callbacks.append(CurriculumCallback(compress_stages, collator=collator))
 
-    trainer = Trainer(
+    trainer_cls = WeightedMultiTaskTrainer if dataset_lengths else Trainer
+    kwargs = {}
+    if dataset_lengths:
+        kwargs["dataset_lengths"] = dataset_lengths
+        kwargs["dataset_weights"] = dataset_weights or {}
+
+    trainer = trainer_cls(
         model=model,
         args=args,
         train_dataset=train_dataset,
@@ -42,5 +54,6 @@ def build_trainer(
         data_collator=collator,
         callbacks=callbacks,
         processing_class=processor,
+        **kwargs,
     )
     return trainer

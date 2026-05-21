@@ -5,9 +5,11 @@ import json
 import sys
 
 import yaml
+from datasets import load_from_disk
 from transformers import HfArgumentParser
 
 from src.dataset.get_wiki import get_wiki
+from src.dataset.multi_dataset import get_weighted_mixer
 from src.models.LatentSeeker.modeling_LatentSeeker import (
     LatentSeekerForConditionalGeneration,
 )
@@ -34,6 +36,7 @@ def _parse_args(
         # Extract params HF's parser can't handle
         model_config_override = yaml_config.pop("model_config", None)
         resume_from_checkpoint = yaml_config.pop("resume_from_checkpoint", None)
+        datasets_config = yaml_config.pop("datasets", None)
 
         # HfArgumentParser can't handle nested list types like list[tuple[float, int]].
         complex_list_key = "compress_stages"
@@ -70,12 +73,41 @@ def _parse_args(
         # Restore nested complex types that HfArgumentParser can't handle from CLI args
         if complex_list_val is not None:
             train_args.compress_stages = [tuple(item) for item in complex_list_val]
+        if datasets_config is not None:
+            data_args.datasets = datasets_config
     else:
         model_config_override = None
         resume_from_checkpoint = None
         train_args, model_args, data_args = parser.parse_args_into_dataclasses()
 
     return train_args, model_args, data_args, model_config_override, resume_from_checkpoint
+
+
+def _load_datasets(data_args: DataArgs):
+    """Load datasets from config.
+
+    Returns ``(train_dataset, dataset_lengths, dataset_weights)`` if multi-dataset,
+    otherwise ``(train_dataset, None, None)``.
+    """
+    if data_args.datasets:
+        datasets = {}
+        weights = {}
+        for name, cfg in data_args.datasets.items():
+            path = cfg["path"]
+            max_s = cfg.get("max_samples", None)
+            weight = cfg.get("weight", 1.0)
+            ds = load_from_disk(path)
+            if max_s is not None:
+                ds = ds.select(range(min(len(ds), max_s)))
+            datasets[name] = ds
+            weights[name] = weight
+
+        combined, lengths = get_weighted_mixer(datasets)
+        return combined, lengths, weights
+
+    # Fallback: single dataset
+    dataset = get_wiki(data_args.data_path, max_samples=data_args.max_samples)
+    return dataset, None, None
 
 
 def train(config_path: str | None = None):
@@ -102,14 +134,20 @@ def train(config_path: str | None = None):
         if config.text_config.vocab_size <= processor.longtext_token_id:
             config.longtext_token_id = config.text_config.vocab_size - 1
 
-    model = LatentSeekerForConditionalGeneration.init_from_pretrained(
-        model_args.model_name,
-        config=config,
-    )
+    if model_args.model_ckpt_path:
+        model = LatentSeekerForConditionalGeneration.from_pretrained(
+            model_args.model_ckpt_path,
+            config=config,
+        )
+    else:
+        model = LatentSeekerForConditionalGeneration.init_from_pretrained(
+            model_args.model_name,
+            config=config,
+        )
 
     apply_freeze(model, train_args.freeze_modules)
 
-    dataset = get_wiki(data_args.data_path, max_samples=data_args.max_samples)
+    dataset, dataset_lengths, dataset_weights = _load_datasets(data_args)
 
     trainer = build_trainer(
         model=model,
@@ -117,6 +155,8 @@ def train(config_path: str | None = None):
         train_dataset=dataset,
         args=train_args,
         compress_stages=train_args.compress_stages,
+        dataset_lengths=dataset_lengths,
+        dataset_weights=dataset_weights,
     )
 
     trainer.train(resume_from_checkpoint=resume_from_checkpoint)
