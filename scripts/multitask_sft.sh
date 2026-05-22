@@ -15,15 +15,15 @@ if [ ! -d "data/wiki/processed_wiki" ]; then
         --output data/wiki/processed_wiki
 fi
 
-if [ ! -d "data/wiki/processed_gen_qa" ]; then
-    if [ -f "data/wiki/qa.jsonl" ]; then
+if [ ! -d "data/gen_wiki/processed_gen_qa" ]; then
+    if [ -f "data/genqa_wiki/gen_qa.jsonl" ]; then
         echo "Preprocessing QA dataset..."
         python -m src.dataset.preprocess_qa \
-            --input data/wiki/qa.jsonl \
-            --output data/wiki/processed_gen_qa \
+            --input data/genqa_wiki/gen_qa.jsonl \
+            --output data/gen_wiki/processed_gen_qa \
             --max-turns 4
     else
-        echo "QA data not found at data/wiki/qa.jsonl"
+        echo "QA data not found at data/genqa_wiki/gen_qa.jsonl"
         echo "Run scripts/gen_qa.sh first to generate multi-turn QA data."
         exit 1
     fi
