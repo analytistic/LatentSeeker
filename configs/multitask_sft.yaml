@@ -41,6 +41,7 @@ deepspeed: deepspeed/zero1.json
 # Freeze: LM only, train encoder + merger + embed
 freeze_modules:
   - model.language_model
+  - model.longtext.embed_tokens
 
 # Compression — single stage = fixed ratio (no curriculum)
 compress_stages:
