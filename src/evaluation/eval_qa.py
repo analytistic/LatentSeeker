@@ -13,13 +13,37 @@ Usage:
 import argparse
 import importlib
 import json
+import os
+import re
 import sys
 
 import torch
 
 from transformers import AutoModel, TextStreamer
 
+from src.evaluation.metrics import Metrics
 from src.models.LatentSeeker.processing_LatentSeeker import LatentSeekerProcessor
+
+# Match <think>...</think> followed by optional newlines and the answer.
+# Handles: well-formed, truncated (no </think>), and no think tags at all.
+_THINK_RE = re.compile(r"^<think>(.*?)</think>\s*\n*\s*(.*)", re.DOTALL)
+
+
+def parse_generation(text: str) -> dict:
+    """Split generated text into reasoning and final answer.
+
+    Returns ``{"reasoning": str, "predicted": str}``.
+    If the model hit ``max_new_tokens`` mid-think, ``reasoning`` gets the
+    truncated think block and ``predicted`` is empty.
+    """
+    match = _THINK_RE.search(text)
+    if match:
+        return {
+            "reasoning": match.group(1).strip(),
+            "predicted": match.group(2).strip(),
+        }
+    # No think tags → entire output is the answer
+    return {"reasoning": "", "predicted": text.strip()}
 
 
 @torch.no_grad()
@@ -31,9 +55,14 @@ def generate(
     max_new_tokens: int,
     device: str,
     stream: bool = False,
-) -> list[dict]:
-    """Run generation and return prediction records."""
+) -> tuple[list[dict], dict]:
+    """Run generation and return (records, summary)."""
     records = []
+    metrics = Metrics()
+    n = 0
+    mean_f1 = 0.0
+    mean_recall = 0.0
+    mean_lt = 0.0
 
     for i, sample in enumerate(samples):
         messages = sample["messages"]
@@ -74,20 +103,40 @@ def generate(
         )
         gen_ids = output_ids[0, prompt_len:].tolist()
         gen_text = processor.decode(gen_ids, skip_special_tokens=True).strip()
+        parsed = parse_generation(gen_text)
+        lt_tokens = inputs.get("longtext_num_tokens", [])
+        lt_total = sum(lt_tokens) if lt_tokens else 0
+
+        scores = metrics.best_f1(parsed["predicted"], sample["answers"])
 
         records.append({
             "id": sample["id"],
-            "predicted": gen_text,
+            "question": sample["question"],
+            "reasoning": parsed["reasoning"],
+            "predicted": parsed["predicted"],
             "answers": sample["answers"],
+            "longtext_tokens": lt_total,
+            "recall": scores["recall"],
+            "f1": scores["f1"],
         })
 
         # Print progress
+        q = sample["question"]
+        ref = sample.get("answers", "")
         print(f"\n--- Sample {i} (compress_ratio={compress_ratio}) ---")
-        print(f"Q:  {sample['question'][:100]}{'...' if len(sample['question']) > 100 else ''}")
-        print(f"A:  {gen_text[:200]}")
+        print(f"Q:    {q[:120]}{'...' if len(q) > 120 else ''}")
+        print(f"R:    {parsed['reasoning'][:120]}{'...' if len(parsed['reasoning']) > 120 else ''}")
+        print(f"A:    {parsed['predicted'][:200]}{'...' if len(parsed['predicted']) > 200 else ''}")
+        print(f"Ref:  {ref[:200]}{'...' if len(ref) > 200 else ''}")
+        n += 1
+        mean_f1 += (scores["f1"] - mean_f1) / n
+        mean_recall += (scores["recall"] - mean_recall) / n
+        mean_lt += (lt_total - mean_lt) / n
+        print(f"LT:   {lt_total} tokens  |  R={scores['recall']:.3f}  F1={scores['f1']:.3f}  |  avg_R={mean_recall:.4f}  avg_F1={mean_f1:.4f}")
         sys.stdout.flush()
 
-    return records
+    print(f"\n>>> compress_ratio={compress_ratio}  |  avg_lt={mean_lt:.0f}  avg_recall={mean_recall:.4f}  avg_f1={mean_f1:.4f}  ({n} samples)")
+    return records, {"avg_lt": mean_lt, "avg_recall": mean_recall, "avg_f1": mean_f1, "samples": n}
 
 
 def main():
@@ -96,13 +145,15 @@ def main():
     parser.add_argument("--dataset", default="squad")
     parser.add_argument("--data_path", required=True)
     parser.add_argument("--split", default="validation", help="Dataset split to evaluate on")
-    parser.add_argument("--output", required=True)
+    parser.add_argument("--output_dir", required=True)
     parser.add_argument("--compress_ratio", type=float, nargs="+", default=[1.0])
     parser.add_argument("--max_samples", type=int, default=None)
     parser.add_argument("--max_new_tokens", type=int, default=128)
     parser.add_argument("--device", default=None)
     parser.add_argument("--stream", action="store_true")
     args = parser.parse_args()
+
+    os.makedirs(args.output_dir, exist_ok=True)
 
     device = args.device or ("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -120,20 +171,31 @@ def main():
     samples = getter.load(args.data_path, split=args.split, max_samples=args.max_samples)
     print(f"Loaded {len(samples)} samples from split '{args.split}'")
 
-    all_records = {}
+    summary = {
+        "dataset": args.dataset,
+        "split": args.split,
+        "samples": len(samples),
+        "compress_ratios": {},
+    }
+
+    records = []
     for cr in args.compress_ratio:
         print(f"\n{'='*60}")
         print(f"Generating with compress_ratio={cr}")
         print(f"{'='*60}")
-        records = generate(model, processor, samples, cr, args.max_new_tokens, device, stream=args.stream)
-        all_records[str(cr)] = records
+        records, cr_summary = generate(model, processor, samples, cr, args.max_new_tokens, device, stream=args.stream)
 
-    # Write output JSONL: each line is {id, predicted, answers}
-    with open(args.output, "w") as f:
-        for records in all_records.values():
+        cr_path = os.path.join(args.output_dir, f"cr_{cr}.jsonl")
+        with open(cr_path, "w") as f:
             for r in records:
                 f.write(json.dumps(r, ensure_ascii=False) + "\n")
-    print(f"\nSaved {sum(len(v) for v in all_records.values())} predictions to {args.output}")
+
+        summary["compress_ratios"][str(cr)] = cr_summary
+
+    summary_path = os.path.join(args.output_dir, "summary.json")
+    with open(summary_path, "w") as f:
+        json.dump(summary, f, indent=2)
+    print(f"\nSaved {len(records)} predictions to {args.output_dir}/")
 
 
 if __name__ == "__main__":

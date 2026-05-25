@@ -1,6 +1,7 @@
 """Evaluation metrics for LatentSeeker paraphrase/reconstruction tasks."""
 
 import math
+import re
 from collections.abc import Callable
 from collections import Counter
 
@@ -100,6 +101,35 @@ class Metrics:
 
         log_avg = sum(math.log(p) for p in precisions) / max_n
         return bp * math.exp(log_avg) * 100
+
+    # ------------------------------------------------------------------
+    # SQuAD-style F1 / Recall
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _word_tokenize(text: str) -> list[str]:
+        return re.findall(r"\w+", text.lower())
+
+    def f1(self, predicted: str, reference: str) -> dict:
+        """Word-level precision, recall, F1."""
+        p = self._word_tokenize(predicted)
+        r = self._word_tokenize(reference)
+        common = set(p) & set(r)
+        if not p or not r:
+            return {"precision": 0.0, "recall": 0.0, "f1": 0.0}
+        precision = len(common) / len(p)
+        recall = len(common) / len(r)
+        f1 = 2 * precision * recall / (precision + recall) if (precision + recall) else 0.0
+        return {"precision": precision, "recall": recall, "f1": f1}
+
+    def best_f1(self, predicted: str, references: list[str]) -> dict:
+        """Best F1 against all references (SQuAD-style)."""
+        best = {"precision": 0.0, "recall": 0.0, "f1": 0.0}
+        for ref in references:
+            s = self.f1(predicted, ref)
+            if s["f1"] > best["f1"]:
+                best = s
+        return best
 
     # ------------------------------------------------------------------
     # Batched helpers
