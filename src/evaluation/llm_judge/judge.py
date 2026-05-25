@@ -62,7 +62,7 @@ class _JudgeAPI:
         self.protocol = protocol
         self.model = model
 
-    def _call(self, system: str, prompt: str) -> str | None:
+    def __call__(self, system: str, prompt: str) -> str | None:
         if self.protocol == "anthropic":
             url = f"{self.base}/messages"
             headers = {
@@ -219,7 +219,7 @@ class Judge:
     def _score_one_turn(self, messages: list) -> dict:
         """Score a single turn's final assistant answer."""
         prompt = SCORE_PROMPT.format(messages=json.dumps(messages, ensure_ascii=False))
-        text = self.api._call("You are a helpful judge.", prompt)
+        text = self.api("You are a helpful judge.", prompt)
         if text is None:
             return {"score": 0, "reasoning": "API error"}
 
