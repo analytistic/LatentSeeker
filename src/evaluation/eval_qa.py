@@ -24,26 +24,33 @@ from transformers import AutoModel, TextStreamer
 from src.evaluation.metrics import Metrics
 from src.models.LatentSeeker.processing_LatentSeeker import LatentSeekerProcessor
 
-# Match <think>...</think> followed by optional newlines and the answer.
-# Handles: well-formed, truncated (no </think>), and no think tags at all.
-_THINK_RE = re.compile(r"^<think>(.*?)</think>\s*\n*\s*(.*)", re.DOTALL)
+# Match optional <think>...</think> followed by optional newlines and the answer.
+# Handles: well-formed, truncated (no </think>), no think tags, and cases
+# where the model continues from generation prompt (no reopening <think>).
+_THINK_RE = re.compile(r"^(?:<think>\n?)?(.*?)</think>\s*\n*\s*(.*)", re.DOTALL)
 
 
-def parse_generation(text: str) -> dict:
+def parse_generation(text: str, no_think: bool = False) -> dict:
     """Split generated text into reasoning and final answer.
 
+    When ``no_think=True``, the model skips the thinking block and the
+    entire output is the answer. When ``no_think=False``, the model is
+    expected to produce ``<think>...</think>`` — if ``</think>`` is
+    missing, the model hit ``max_new_tokens`` mid-think (truncated).
+
     Returns ``{"reasoning": str, "predicted": str}``.
-    If the model hit ``max_new_tokens`` mid-think, ``reasoning`` gets the
-    truncated think block and ``predicted`` is empty.
     """
+    if no_think:
+        return {"reasoning": "", "predicted": text.strip()}
+
     match = _THINK_RE.search(text)
     if match:
         return {
             "reasoning": match.group(1).strip(),
             "predicted": match.group(2).strip(),
         }
-    # No think tags → entire output is the answer
-    return {"reasoning": "", "predicted": text.strip()}
+    # Expected </think> but not found → truncated thinking loop
+    return {"reasoning": text.strip(), "predicted": ""}
 
 
 @torch.no_grad()
@@ -55,6 +62,7 @@ def generate(
     max_new_tokens: int,
     device: str,
     stream: bool = False,
+    no_think: bool = False,
 ) -> tuple[list[dict], dict]:
     """Run generation and return (records, summary)."""
     records = []
@@ -63,6 +71,7 @@ def generate(
     mean_f1 = 0.0
     mean_recall = 0.0
     mean_lt = 0.0
+    truncated = 0
 
     for i, sample in enumerate(samples):
         messages = sample["messages"]
@@ -75,6 +84,7 @@ def generate(
             return_dict=True,
             return_tensors="pt",
             compress_ratio=compress_ratio,
+            no_think=no_think,
         )
         inputs = {k: v.to(model.device) if isinstance(v, torch.Tensor) else v for k, v in inputs.items()}
 
@@ -103,7 +113,9 @@ def generate(
         )
         gen_ids = output_ids[0, prompt_len:].tolist()
         gen_text = processor.decode(gen_ids, skip_special_tokens=True).strip()
-        parsed = parse_generation(gen_text)
+        parsed = parse_generation(gen_text, no_think=no_think)
+        if not no_think and parsed["predicted"] == "" and gen_text:
+            truncated += 1
         lt_tokens = inputs.get("longtext_num_tokens", [])
         lt_total = sum(lt_tokens) if lt_tokens else 0
 
@@ -135,8 +147,8 @@ def generate(
         print(f"LT:   {lt_total} tokens  |  R={scores['recall']:.3f}  F1={scores['f1']:.3f}  |  avg_R={mean_recall:.4f}  avg_F1={mean_f1:.4f}")
         sys.stdout.flush()
 
-    print(f"\n>>> compress_ratio={compress_ratio}  |  avg_lt={mean_lt:.0f}  avg_recall={mean_recall:.4f}  avg_f1={mean_f1:.4f}  ({n} samples)")
-    return records, {"avg_lt": mean_lt, "avg_recall": mean_recall, "avg_f1": mean_f1, "samples": n}
+    print(f"\n>>> compress_ratio={compress_ratio}  |  avg_lt={mean_lt:.0f}  avg_recall={mean_recall:.4f}  avg_f1={mean_f1:.4f}  ({n} samples, {truncated} truncated)")
+    return records, {"avg_lt": mean_lt, "avg_recall": mean_recall, "avg_f1": mean_f1, "samples": n, "truncated": truncated}
 
 
 def main():
@@ -151,6 +163,7 @@ def main():
     parser.add_argument("--max_new_tokens", type=int, default=128)
     parser.add_argument("--device", default=None)
     parser.add_argument("--stream", action="store_true")
+    parser.add_argument("--no-think", action="store_true", help="Skip <think> block in generation prompt")
     args = parser.parse_args()
 
     os.makedirs(args.output_dir, exist_ok=True)
@@ -175,6 +188,7 @@ def main():
         "dataset": args.dataset,
         "split": args.split,
         "samples": len(samples),
+        "no_think": args.no_think,
         "compress_ratios": {},
     }
 
@@ -183,7 +197,7 @@ def main():
         print(f"\n{'='*60}")
         print(f"Generating with compress_ratio={cr}")
         print(f"{'='*60}")
-        records, cr_summary = generate(model, processor, samples, cr, args.max_new_tokens, device, stream=args.stream)
+        records, cr_summary = generate(model, processor, samples, cr, args.max_new_tokens, device, stream=args.stream, no_think=args.no_think)
 
         cr_path = os.path.join(args.output_dir, f"cr_{cr}.jsonl")
         with open(cr_path, "w") as f:
