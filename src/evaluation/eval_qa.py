@@ -70,8 +70,11 @@ def generate(
     n = 0
     mean_f1 = 0.0
     mean_recall = 0.0
-    mean_lt = 0.0
+    mean_latent = 0.0
+    mean_longtext = 0.0
     truncated = 0
+    mean_reasoning_len = 0.0
+    reasoning_n = 0
 
     for i, sample in enumerate(samples):
         messages = sample["messages"]
@@ -114,10 +117,14 @@ def generate(
         gen_ids = output_ids[0, prompt_len:].tolist()
         gen_text = processor.decode(gen_ids, skip_special_tokens=True).strip()
         parsed = parse_generation(gen_text, no_think=no_think)
+        n_reasoning = 0
         if not no_think and parsed["predicted"] == "" and gen_text:
             truncated += 1
-        lt_tokens = inputs.get("longtext_num_tokens", [])
-        lt_total = sum(lt_tokens) if lt_tokens else 0
+        elif not no_think and parsed["reasoning"]:
+            n_reasoning = len(processor.tokenizer.encode(parsed["reasoning"]))
+            mean_reasoning_len += (n_reasoning - mean_reasoning_len) / (n - truncated)
+        n_latent = sum(inputs.get("longtext_num_tokens", []) or [])
+        n_longtext = len(inputs.get("longtext_input_ids", []))
 
         scores = metrics.best_f1(parsed["predicted"], sample["answers"])
 
@@ -125,9 +132,11 @@ def generate(
             "id": sample["id"],
             "question": sample["question"],
             "reasoning": parsed["reasoning"],
+            "n_reasoning": n_reasoning,
             "predicted": parsed["predicted"],
             "answers": sample["answers"],
-            "longtext_tokens": lt_total,
+            "longtext": n_longtext,
+            "n_latent": n_latent,
             "recall": scores["recall"],
             "f1": scores["f1"],
         })
@@ -135,7 +144,7 @@ def generate(
         # Print progress
         q = sample["question"]
         ref = sample.get("answers", "")
-        print(f"\n--- Sample {i} (compress_ratio={compress_ratio}) ---")
+        print(f"\n\n--- Sample {i} (compress_ratio={compress_ratio}) ---")
         print(f"Q:    {q[:120]}{'...' if len(q) > 120 else ''}")
         print(f"R:    {parsed['reasoning'][:120]}{'...' if len(parsed['reasoning']) > 120 else ''}")
         print(f"A:    {parsed['predicted'][:200]}{'...' if len(parsed['predicted']) > 200 else ''}")
@@ -143,12 +152,13 @@ def generate(
         n += 1
         mean_f1 += (scores["f1"] - mean_f1) / n
         mean_recall += (scores["recall"] - mean_recall) / n
-        mean_lt += (lt_total - mean_lt) / n
-        print(f"LT:   {lt_total} tokens  |  R={scores['recall']:.3f}  F1={scores['f1']:.3f}  |  avg_R={mean_recall:.4f}  avg_F1={mean_f1:.4f}")
+        mean_latent += (n_latent - mean_latent) / n
+        mean_longtext += (n_longtext - mean_longtext) / n
+        print(f"LT:   {n_longtext}→{n_latent}  |  reasoning={n_reasoning}tok  |  R={scores['recall']:.3f}  F1={scores['f1']:.3f}  |  avg_R={mean_recall:.4f}  avg_F1={mean_f1:.4f}\n")
         sys.stdout.flush()
 
-    print(f"\n>>> compress_ratio={compress_ratio}  |  avg_lt={mean_lt:.0f}  avg_recall={mean_recall:.4f}  avg_f1={mean_f1:.4f}  ({n} samples, {truncated} truncated)")
-    return records, {"avg_lt": mean_lt, "avg_recall": mean_recall, "avg_f1": mean_f1, "samples": n, "truncated": truncated}
+    print(f"\n\n>>> compress_ratio={compress_ratio}  |  longtext={mean_longtext:.0f}→latent={mean_latent:.0f}  reasoning={mean_reasoning_len:.0f}tok  R={mean_recall:.4f}  F1={mean_f1:.4f}  ({n} samples, {truncated} truncated)\n")
+    return records, {"longtext": mean_longtext, "latent": mean_latent, "reasoning_tok": mean_reasoning_len, "recall": mean_recall, "f1": mean_f1, "samples": n, "truncated": truncated}
 
 
 def main():
@@ -209,7 +219,8 @@ def main():
     summary_path = os.path.join(args.output_dir, "summary.json")
     with open(summary_path, "w") as f:
         json.dump(summary, f, indent=2)
-    print(f"\nSaved {len(records)} predictions to {args.output_dir}/")
+    print(f"\nSaved {len(records)} predictions to {args.output_dir}/\n")
+    print(json.dumps(summary, indent=2))
 
 
 if __name__ == "__main__":
