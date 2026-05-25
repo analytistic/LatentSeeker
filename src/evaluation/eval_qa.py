@@ -122,7 +122,6 @@ def generate(
             truncated += 1
         elif not no_think and parsed["reasoning"]:
             n_reasoning = len(processor.tokenizer.encode(parsed["reasoning"]))
-            mean_reasoning_len += (n_reasoning - mean_reasoning_len) / (n - truncated)
         n_latent = sum(inputs.get("longtext_num_tokens", []) or [])
         n_longtext = len(inputs.get("longtext_input_ids", []))
 
@@ -154,6 +153,9 @@ def generate(
         mean_recall += (scores["recall"] - mean_recall) / n
         mean_latent += (n_latent - mean_latent) / n
         mean_longtext += (n_longtext - mean_longtext) / n
+        if n_reasoning:
+            reasoning_n += 1
+            mean_reasoning_len += (n_reasoning - mean_reasoning_len) / reasoning_n
         print(f"LT:   {n_longtext}→{n_latent}  |  reasoning={n_reasoning}tok  |  R={scores['recall']:.3f}  F1={scores['f1']:.3f}  |  avg_R={mean_recall:.4f}  avg_F1={mean_f1:.4f}\n")
         sys.stdout.flush()
 
