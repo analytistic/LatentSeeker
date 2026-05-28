@@ -1,9 +1,9 @@
-from transformers import AutoConfig, AutoModelForCausalLM, AutoProcessor
+from transformers import AutoConfig, AutoModelForImageTextToText, AutoProcessor
 
 from .configuration_LatentSeeker import LatentSeekerConfig
 from .modeling_LatentSeeker import LatentSeekerForConditionalGeneration
 from .processing_LatentSeeker import LatentSeekerProcessor
 
 AutoConfig.register("latent_seeker", LatentSeekerConfig)
-AutoModelForCausalLM.register(LatentSeekerConfig, LatentSeekerForConditionalGeneration)
+AutoModelForImageTextToText.register(LatentSeekerConfig, LatentSeekerForConditionalGeneration)
 AutoProcessor.register(LatentSeekerConfig, LatentSeekerProcessor)
