@@ -7,7 +7,9 @@ Usage (library):
 
     # Single model scoring
     result = judge({"ls": "rollouts/ls.jsonl"})
-    # → {"ls": [{"id": "0", "turns": [{"turn": 1, "score": 4, ...}, ...]}]}
+    # → {"ls": [{"id": "0", "turns": [{"turn": 1,
+    #      "answer": {"score": 4, "reasoning": "..."},
+    #      "reasoning_chain": {"score": 3, "reasoning": "..."}}, ...]}]}
 
     # Multi-model comparison
     result = judge({"ls": "rollouts/ls.jsonl", "qwen": "rollouts/qwen.jsonl"})
@@ -30,20 +32,32 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Literal
 
-SCORE_PROMPT = """You are evaluating a model's answer in a conversation. Assess the final assistant response based on accuracy, completeness, and relevance to the conversation context.
+SCORE_PROMPT = """You are evaluating a model's answer in a multi-turn conversation.
+Focus ONLY on the LAST assistant message.
 
 Conversation:
 {messages}
 
-Score the final assistant response on a scale of 1-5:
-1 = completely wrong / irrelevant
-2 = partially correct but missing key points
-3 = mostly correct with minor issues
-4 = correct and comprehensive
-5 = perfect, clear, and complete
+Evaluate the final assistant response on two dimensions:
 
-Output ONLY a JSON object:
-{{"score": <int 1-5>, "reasoning": "<one-sentence explanation>"}}"""
+1. Answer: quality of the final answer itself
+   - Is it accurate, complete, and relevant?
+   - Score 1-5 where 1 = wrong/irrelevant, 3 = mostly correct, 5 = perfect
+
+2. Reasoning: quality of the thinking/reasoning chain (<think> block)
+   - Is the logic sound, well-structured, and insightful?
+   - Score 1-5 where 1 = no reasoning or irrelevant, 3 = reasonable but shallow, 5 = rigorous and insightful
+
+Output ONLY XML. No other text.
+
+<answer>
+  <score>1-5</score>
+  <reasoning>one-sentence explanation</reasoning>
+</answer>
+<reasoning_chain>
+  <score>1-5</score>
+  <reasoning>one-sentence explanation</reasoning>
+</reasoning_chain>"""
 
 
 # ── Internal API client ───────────────────────────────────────────────
@@ -216,28 +230,49 @@ class Judge:
                 })
         return turns
 
+    @staticmethod
+    def _parse_xml(text: str) -> dict:
+        """Extract answer/reasoning_chain scores from XML."""
+        result = {}
+        m = re.search(
+            r"<answer>\s*<score>\s*(\d+)\s*</score>\s*<reasoning>(.*?)</reasoning>\s*</answer>",
+            text, re.DOTALL,
+        )
+        if m:
+            result["answer"] = {"score": int(m.group(1)), "reasoning": m.group(2).strip()}
+        m = re.search(
+            r"<reasoning_chain>\s*<score>\s*(\d+)\s*</score>\s*<reasoning>(.*?)</reasoning>\s*</reasoning_chain>",
+            text, re.DOTALL,
+        )
+        if m:
+            result["reasoning_chain"] = {"score": int(m.group(1)), "reasoning": m.group(2).strip()}
+        return result
+
     def _score_one_turn(self, messages: list) -> dict:
         """Score a single turn's final assistant answer."""
         prompt = SCORE_PROMPT.format(messages=json.dumps(messages, ensure_ascii=False))
         text = self.api("You are a helpful judge.", prompt)
         if text is None:
-            return {"score": 0, "reasoning": "API error"}
+            return {
+                "answer": {"score": 0, "reasoning": "API error"},
+                "reasoning_chain": {"score": 0, "reasoning": "API error"},
+            }
 
-        match = re.search(r"\{.*\}", text, re.DOTALL)
-        if match:
-            try:
-                return json.loads(match.group())
-            except json.JSONDecodeError:
-                pass
-        return {"score": 0, "reasoning": text}
+        parsed = self._parse_xml(text)
+        if parsed:
+            return parsed
+        return {
+            "answer": {"score": 0, "reasoning": text},
+            "reasoning_chain": {"score": 0, "reasoning": text},
+        }
 
     def _score_one_record(self, record: dict) -> dict:
         """Score all turns in a single record."""
         turns = self._split_turns(record["messages"])
         for t in turns:
             r = self._score_one_turn(t["messages"])
-            t["score"] = r.get("score", 0)
-            t["reasoning"] = r.get("reasoning", "")
+            t["answer"] = r.get("answer", {})
+            t["reasoning_chain"] = r.get("reasoning_chain", {})
             # Remove redundant messages from output
             del t["messages"]
         return {"id": record["id"], "turns": turns}
@@ -259,6 +294,13 @@ class Judge:
 
             result[name] = scored
         return result
+
+    @staticmethod
+    def _overall(scores: dict) -> float:
+        """Combined score from answer + reasoning_chain for comparison."""
+        ans = scores.get("answer", {}).get("score", 0)
+        rea = scores.get("reasoning_chain", {}).get("score", 0)
+        return (ans + rea) / 2.0
 
     def _compare_all(self, data: dict[str, list[dict]]) -> list[dict]:
         """Cross-model comparison: align by id, compare turn by turn."""
@@ -290,21 +332,27 @@ class Judge:
                     if turn_idx < len(turns):
                         r = self._score_one_turn(turns[turn_idx]["messages"])
                         scores[name] = {
-                            "score": r.get("score", 0),
-                            "reasoning": r.get("reasoning", ""),
+                            "answer": r.get("answer", {}),
+                            "reasoning_chain": r.get("reasoning_chain", {}),
                             "predicted": turns[turn_idx]["predicted"],
                             "question": turns[turn_idx]["question"],
                         }
 
-                # Determine winner(s)
-                max_score = max(s["score"] for s in scores.values())
-                winners = [n for n, s in scores.items() if s["score"] == max_score]
+                # Determine winner(s) by average of both dimensions
+                max_score = max(self._overall(s) for s in scores.values())
+                winners = [n for n, s in scores.items() if self._overall(s) == max_score]
                 winner = winners[0] if len(winners) == 1 else "tie"
 
                 turn_results.append({
                     "turn": turn_idx + 1,
                     "question": next((s["question"] for s in scores.values() if s["question"]), ""),
-                    "scores": {n: s["score"] for n, s in scores.items()},
+                    "scores": {
+                        n: {
+                            "answer": s["answer"].get("score", 0),
+                            "reasoning_chain": s["reasoning_chain"].get("score", 0),
+                        }
+                        for n, s in scores.items()
+                    },
                     "predicted": {n: s["predicted"] for n, s in scores.items()},
                     "winner": winner,
                 })
