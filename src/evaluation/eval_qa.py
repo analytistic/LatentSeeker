@@ -23,7 +23,7 @@ from collections import deque
 import torch
 
 import src.models.LatentSeeker  # register LatentSeeker with AutoModel
-from transformers import AutoModel, AutoProcessor, TextStreamer
+from transformers import AutoProcessor, TextStreamer, AutoModelForCausalLM
 
 from src.evaluation.metrics import Metrics
 
@@ -253,7 +253,7 @@ def main():
     os.makedirs(args.output_dir, exist_ok=True)
 
     print(f"Loading model from {args.model_path} ...")
-    model = AutoModel.from_pretrained(
+    model = AutoModelForCausalLM.from_pretrained(
         args.model_path,
         device_map=args.device,
     ).eval()
