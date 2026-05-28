@@ -7,7 +7,7 @@ Usage (library):
 
     # Single model scoring
     result = judge({"ls": "rollouts/ls.jsonl"})
-    # → {"ls": [{"id": "0", "turns": [{"turn": 1,
+    # → {"ls": [{"turns": [{"turn": 1,
     #      "answer": {"score": 4, "reasoning": "..."},
     #      "reasoning_chain": {"score": 3, "reasoning": "..."}}, ...]}]}
 
@@ -275,22 +275,18 @@ class Judge:
             t["reasoning_chain"] = r.get("reasoning_chain", {})
             # Remove redundant messages from output
             del t["messages"]
-        return {"id": record["id"], "turns": turns}
+        return {"turns": turns}
 
     def _score_all(self, data: dict[str, list[dict]]) -> dict:
         """Score all records for all models, parallelized across records."""
         result = {}
         for name, records in data.items():
-            scored = []
+            scored = [None] * len(records)
             with ThreadPoolExecutor(max_workers=self.max_workers) as pool:
-                futures = {pool.submit(self._score_one_record, r): r["id"] for r in records}
-                for future in as_completed(futures):
-                    scored.append(future.result())
-
-            # Restore original order
-            id_order = [r["id"] for r in records]
-            id_idx = {r["id"]: i for i, r in enumerate(records)}
-            scored.sort(key=lambda s: id_idx.get(s["id"], 0))
+                fut_to_idx = {pool.submit(self._score_one_record, r): i for i, r in enumerate(records)}
+                for future in as_completed(fut_to_idx):
+                    idx = fut_to_idx[future]
+                    scored[idx] = future.result()
 
             result[name] = scored
         return result
