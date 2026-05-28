@@ -22,7 +22,8 @@ from collections import deque
 
 import torch
 
-from transformers import AutoModel, AutoProcessor, TextStreamer
+import src.models.LatentSeeker  # register LatentSeeker with AutoModel
+from transformers import AutoProcessor, TextStreamer, AutoModelForImageTextToText
 
 from src.evaluation.metrics import Metrics
 
@@ -82,7 +83,7 @@ def infer_one(
 
     # --- Tokenize ---
     tt_kwargs = dict(
-        messages=messages,
+        conversation=messages,
         tokenize=True,
         add_generation_prompt=True,
         return_dict=True,
@@ -139,7 +140,7 @@ def infer_one(
         "predicted": parsed["predicted"],
         "answers": sample["answers"],
         "longtext": 0 if baseline else len(inputs.get("longtext_input_ids", [])),
-        "n_latent": 0 if baseline else sum(inputs.get("longtext_num_tokens", []) or []),
+        "n_latent": 0 if baseline else int(sum(inputs.get("longtext_num_tokens", [0]).cpu().numpy())),
         "truncated": truncated,
     }
 
@@ -252,7 +253,7 @@ def main():
     os.makedirs(args.output_dir, exist_ok=True)
 
     print(f"Loading model from {args.model_path} ...")
-    model = AutoModel.from_pretrained(
+    model = AutoModelForImageTextToText.from_pretrained(
         args.model_path,
         device_map=args.device,
     ).eval()
