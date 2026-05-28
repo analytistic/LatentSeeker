@@ -140,7 +140,7 @@ def infer_one(
         "predicted": parsed["predicted"],
         "answers": sample["answers"],
         "longtext": 0 if baseline else len(inputs.get("longtext_input_ids", [])),
-        "n_latent": 0 if baseline else sum(inputs.get("longtext_num_tokens", []) or []),
+        "n_latent": 0 if baseline else int(sum(inputs.get("longtext_num_tokens", [0]).cpu().numpy())),
         "truncated": truncated,
     }
 
