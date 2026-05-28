@@ -519,7 +519,7 @@ class LatentSeekerForConditionalGeneration(LatentSeekerPreTrainedModel, Generati
 
         loss = None
         if labels is not None:
-            loss = self.loss_function(logits=logits, labels=labels, vocab_size=self.config.text_config.vocab_size)
+            loss = self.loss_function(logits=logits, labels=labels, vocab_size=self.config.text_config.vocab_size, **kwargs)
 
 
         return CausalLMOutputWithPast(
