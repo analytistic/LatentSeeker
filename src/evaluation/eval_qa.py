@@ -22,6 +22,7 @@ from collections import deque
 
 import torch
 
+import src.models.LatentSeeker  # register LatentSeeker with AutoModel
 from transformers import AutoModel, AutoProcessor, TextStreamer
 
 from src.evaluation.metrics import Metrics
