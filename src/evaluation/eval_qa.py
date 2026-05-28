@@ -83,7 +83,7 @@ def infer_one(
 
     # --- Tokenize ---
     tt_kwargs = dict(
-        messages=messages,
+        conversation=messages,
         tokenize=True,
         add_generation_prompt=True,
         return_dict=True,
