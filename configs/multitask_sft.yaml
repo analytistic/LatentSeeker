@@ -1,0 +1,48 @@
+output_dir: outputs/multitask_sft
+
+# Model — base model config / processor path
+model_name: src/models/LatentSeeker
+
+# Data — multi-dataset mixing
+datasets:
+  wiki:
+    path: data/wiki/processed_wiki
+    weight: 0.5
+  qa:
+    path: data/gen_wiki/processed_gen_qa
+    weight: 0.5
+
+per_device_train_batch_size: 2
+gradient_accumulation_steps: 32
+dataloader_num_workers: 4
+remove_unused_columns: false
+
+# Schedule
+num_train_epochs: 1
+learning_rate: 1e-5
+warmup_steps: 100
+lr_scheduler_type: cosine
+weight_decay: 0.1
+max_grad_norm: 1.0
+
+# Seed
+seed: 42
+
+# Logging & saving
+logging_steps: 1
+save_steps: 50
+save_total_limit: 2
+
+# Precision
+bf16: true
+report_to: tensorboard
+deepspeed: deepspeed/zero1.json
+
+# Freeze: LM only, train encoder + merger + embed
+freeze_modules:
+  - model.language_model
+  - model.longtext.embed_tokens
+
+# Compression — single stage = fixed ratio (no curriculum)
+compress_stages:
+  - [0, 5]

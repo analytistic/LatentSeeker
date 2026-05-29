@@ -52,38 +52,33 @@ print(processor.decode(outputs[0]))
 
 ## Training
 
-### Pretrain task: longtext repetition
+### Stage 1: Pretrain (repetition task)
 
-Each sample contains a long document as both encoder input and decoder target. The model learns to compress the document into latent tokens and then reconstruct it.
+Freeze encoder, embed_tokens, and language model — only the merger is trained.
 
-### Progressive training plan
+Each sample presents a long document via `<|longtext_pad|>` placeholder. The model learns to compress it into latent tokens and reconstruct the original text, with **curriculum compression** gradually increasing the compression ratio from 1 → 5.
 
-| Stage | Trainable | Frozen | Learning rate | Goal |
-|-------|-----------|--------|---------------|------|
-| 1 | `longtext.merger` | Everything else | 1e-3 | Bridge alignment: random init → stable mapping |
-| 2 | `longtext.layers` + merger | `language_model` + embed_tokens | 1e-4 | Encoder learns bidirectional compression |
-| 3 | `longtext.embed_tokens` + layers + merger | `language_model` | 1e-4 | Embedding adapts to encoder needs |
-| 4 | All parameters | None | 1e-5 | Full fine-tune: LM adapts to latent inputs |
-
-Between stages, save a checkpoint and resume with updated freeze config.
-
-### Usage
+| Trainable | Frozen | LR | Compress ratio |
+|-----------|--------|----|----------------|
+| `longtext.merger` | `language_model` + `embed_tokens` + `longtext.layers` | 1e-3 | 1 → 5 (curriculum) |
 
 ```bash
-# Stage 1: train merger only
-python main.py --config_path configs/pretrain_stage1.yaml
+python main.py --config_path configs/pretrain.yaml
+```
 
-# Stage 2: continue from stage1 checkpoint, train layers + merger
-python main.py --config_path configs/pretrain_stage2.yaml \
-    --model_name outputs/stage1
+### Stage 2: Multi-task SFT
 
-# Stage 3: add embed_tokens
-python main.py --config_path configs/pretrain_stage3.yaml \
-    --model_name outputs/stage2
+Unfreeze encoder + embed_tokens + merger, keep language_model frozen. Mixed dataset training with two objectives:
 
-# Stage 4: full fine-tune
-python main.py --config_path configs/pretrain_stage4.yaml \
-    --model_name outputs/stage3
+- **Repetition** (wiki): continue learning document compression at fixed ratio 5
+- **Multi-turn QA** (synthesized): learn to answer questions about the compressed document
+
+| Trainable | Frozen | LR | Compress ratio |
+|-----------|--------|----|----------------|
+| `longtext.embed_tokens` + `longtext.layers` + `longtext.merger` | `language_model` | 1e-5 | 5 (fixed) |
+
+```bash
+python main.py --config_path configs/multitask_sft.yaml
 ```
 
 ## Components

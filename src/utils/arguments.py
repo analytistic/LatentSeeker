@@ -5,17 +5,25 @@ from transformers import TrainingArguments
 
 @dataclass
 class DataArgs:
-    data_name: str = field(default="wiki", metadata={"help": "The name of the dataset to use (via the datasets library)."})
-    data_path: str = field(default="data/wiki/wiki.jsonl", metadata={"help": "Path or name of the dataset; if None, defaults to data_name."})
-    split: str = field(default="train", metadata={"help": "The split of the dataset to use."})
-    max_samples: int | None = field(default=None, metadata={"help": "Limit dataset size for debugging."})
+    data_path: str | None = field(default=None, metadata={"help": "Single dataset path (backward compat). Ignored if datasets is set."})
+    max_samples: int | None = field(default=None, metadata={"help": "Limit dataset size for debugging (backward compat)."})
+    datasets: dict | None = field(
+        default=None,
+        metadata={"help": "Multi-dataset config: {name: {path, weight, max_samples}}. "
+                         "e.g. '{\"wiki\": {\"path\": \"data/wiki/processed_wiki\", \"weight\": 0.5}}'"},
+    )
 
 
 @dataclass
 class ModelArgs:
     model_name: str = field(
         default="src/models/LatentSeeker",
-        metadata={"help": "Path to the model directory."},
+        metadata={"help": "Path to the base model directory."},
+    )
+    model_ckpt_path: str | None = field(
+        default=None,
+        metadata={"help": "Trained checkpoint path. If set, loads weights directly via from_pretrained "
+                         "instead of init_from_pretrained (skips embed/layer initialization)."},
     )
     model_cache_dir: str = field(
         default="",

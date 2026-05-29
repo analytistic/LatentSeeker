@@ -1,8 +1,15 @@
 output_dir: outputs/debug
 
-# Data
-data_path: data/debug/processed_debug
-max_samples: 100
+# Data — multi-dataset mixing
+datasets:
+  wiki:
+    path: data/debug/processed_debug
+    weight: 0.5
+    max_samples: 100
+  qa:
+    path: data/debug/processed_gen_qa
+    weight: 0.5
+    max_samples: 50
 per_device_train_batch_size: 2
 gradient_accumulation_steps: 2
 dataloader_num_workers: 2
