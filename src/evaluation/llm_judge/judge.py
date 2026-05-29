@@ -158,6 +158,7 @@ class Judge:
     ):
         self.api = _JudgeAPI(base, key, protocol, model)
         self.max_workers = max_workers
+        self.prefix_map = {}
 
     # ── Public API ────────────────────────────────────────────────────
 
@@ -183,16 +184,36 @@ class Judge:
             result["compare"] = self._compare_all(data)
 
         return result
+    
+    def _build_prefix(self, records: list[dict]):
+
 
     def check(self, inputs: dict[str, str | list[dict]]) -> dict[str, list[dict]]:
-        """Normalize inputs: path → read JSONL, list → keep as-is."""
+        """Normalize inputs: path → read JSONL, list → keep as-is.
+
+        Normalizes message content to plain text so downstream scoring
+        works uniformly regardless of source model format.
+        """
         result = {}
         for name, value in inputs.items():
             if isinstance(value, str):
                 with open(value) as f:
-                    result[name] = [json.loads(line) for line in f]
+                    records = [json.loads(line) for line in f]
             else:
-                result[name] = value
+                records = list(value)
+
+            # Normalize content to plain text
+            for record in records:
+                for msg in record.get("messages", []):
+                    c = msg.get("content")
+                    if isinstance(c, list):
+                        texts = []
+                        for item in c:
+                            if isinstance(item, dict):
+                                texts.append(item.get("text") or item.get("longtext") or "")
+                        msg["content"] = "\n".join(texts).strip()
+
+            result[name] = records
         return result
 
     # ── Internals ─────────────────────────────────────────────────────
@@ -212,14 +233,12 @@ class Judge:
                 question = ""
                 for m in reversed(ctx_so_far):
                     if m["role"] == "user":
-                        for c in m.get("content", []):
-                            if isinstance(c, dict) and c.get("type") == "text":
-                                question = c["text"].strip()
+                        c = m.get("content", "")
+                        question = c.strip() if isinstance(c, str) else str(c).strip()
                         break
-                predicted = ""
-                for c in msg.get("content", []):
-                    if isinstance(c, dict) and c.get("type") == "text":
-                        predicted = c["text"].strip()
+                predicted = msg.get("content", "")
+                if isinstance(predicted, str):
+                    predicted = predicted.strip()
 
                 turns.append({
                     "turn": len(turns) + 1,
