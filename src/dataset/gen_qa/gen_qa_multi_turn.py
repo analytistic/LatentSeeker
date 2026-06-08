@@ -61,6 +61,36 @@ Reasoning: <step-by-step reasoning>
 Answer: <concise answer>"""
 
 
+EVOLVE_PROMPT = """Seed question:
+Q: {seed_q}
+A: {seed_a}
+
+Evolve type: {evolve_type}
+
+- depth: Increase reasoning steps, require deeper multi-step inference.
+- breadth: Combine with another concept or information from the documents.
+- constraint: Add new conditions, constraints, or edge cases.
+- backward: Reverse the direction — given the answer, infer the cause or conditions.
+
+Use the documents above for context. Output exactly:
+Question: <evolved question>
+Reasoning: <step-by-step reasoning>
+Answer: <concise answer>"""
+
+CHECK_PROMPT = """Does the following question meet ALL requirements?
+
+1. Meaningful (not trivial, not repetitive of the seed)
+2. Solvable (can be answered using the documents available)
+3. Non-trivial (requires reasoning, not a simple lookup)
+
+Question: {question}
+Answer: {answer}
+
+Answer ONLY with YES or NO."""
+
+
+# ── Formatting ──────────────────────────────────────────────────────────
+
 def format_conversation(
     groups: list[list[str]],
     turns: list[tuple[int, dict[str, str]]],
@@ -76,6 +106,15 @@ def format_conversation(
                 block += f"\nQ{i + 1}: {t['question']}\nR{i + 1}: {t['reasoning']}\nA{i + 1}: {t['answer']}"
         blocks.append(block)
     return "\n\n---\n\n".join(blocks)
+
+
+def format_turns_only(turns: list[tuple[int, dict[str, str]]]) -> str:
+    """Format Q&A turns without document blocks."""
+    lines = []
+    for i, (_, t) in enumerate(turns):
+        lines.append(f"Q{i + 1}: {t['question']}")
+        lines.append(f"A{i + 1}: {t['answer']}")
+    return "\n".join(lines)
 
 
 # ── Message building ────────────────────────────────────────────────────
@@ -149,7 +188,72 @@ def _batch_docs(
                 break
         if not batch:
             return
-        yield batch  # may be smaller than batch_size at end of file
+        yield batch
+
+
+# ── Evolve helpers ─────────────────────────────────────────────────────
+
+EVOLVE_TYPES = ["depth", "breadth", "constraint", "backward"]
+
+
+def _pick_seed_turns(
+    all_turns: list[tuple[int, dict[str, str]]],
+) -> tuple[dict[str, str], ...]:
+    """Pick 1 or 2 previous turns as evolution seeds."""
+    n = min(len(all_turns), random.choice([1, 2]))
+    return tuple(t for _, t in random.sample(all_turns, n))
+
+
+def try_evolve(
+    all_turns: list[tuple[int, dict[str, str]]],
+    groups: list[list[str]],
+    tokenizer: AutoTokenizer,
+    api_base: str,
+    api_key: str,
+    protocol: Literal["anthropic", "openai"],
+    model: str,
+    max_tokens_per_call: int,
+    temperature: float,
+    max_retries: int,
+) -> tuple[dict[str, str], int, float] | None:
+    """Try to evolve a seed turn up to ``max_retries`` times.
+
+    Returns ``(turn, candidate_total, api_time_s)`` or ``None`` on failure.
+    """
+    seeds = _pick_seed_turns(all_turns)
+    seed_q = "\n".join(f"Q: {t['question']}\nA: {t['answer']}" for t in seeds)
+
+    for _ in range(max_retries):
+        evolve_type = random.choice(EVOLVE_TYPES)
+        prompt = EVOLVE_PROMPT.format(
+            seed_q=seed_q, evolve_type=evolve_type
+        )
+
+        content, elapsed = call_api(
+            api_base, api_key, protocol, model,
+            "You are a question evolution assistant.",
+            prompt, max_tokens_per_call, temperature,
+        )
+        if not content:
+            continue
+
+        turn = parse_one_turn(content)
+        if not turn:
+            continue
+
+        # Check: meaningful and solvable?
+        check_prompt = CHECK_PROMPT.format(
+            question=turn["question"], answer=turn["answer"]
+        )
+        check_result, _ = call_api(
+            api_base, api_key, protocol, model,
+            "You are a quality checker.", check_prompt,
+            max_tokens_per_call // 2, 0.0,
+        )
+        if check_result and check_result.strip().upper() == "YES":
+            return turn, elapsed
+
+    return None
 
 
 # ── Conversation generation ────────────────────────────────────────────
@@ -188,12 +292,10 @@ def process_conversation(
     pos = 0
 
     while sum(len(g) for g in groups) < max_docs and pos < len(documents):
-        # ── 1. Sample group size ───────────────────────────────────
         remaining_docs = max_docs - sum(len(g) for g in groups)
         remaining_input = len(documents) - pos
         gs = random.randint(1, min(max_group_size, remaining_docs, remaining_input))
 
-        # ── 2. Take ``gs`` docs from the input list ─────────────────
         group_docs = documents[pos:pos + gs]
         pos += gs
 
@@ -201,36 +303,55 @@ def process_conversation(
         groups.append(group_docs)
         group_has_turns = False
 
-        # ── 3. Generate Q&A turns for this group ───────────────────
         n_queries = random.randint(1, max_group_query_num)
-        for _ in range(n_queries):
-            prompt = MULTI_TURN_PROMPT.format(
-                conversation=format_conversation(groups, all_turns),
-                type_instruction=QUESTION_TYPE_DEFS[
-                    sample_type(question_pool, last_type)
-                ]["instruction"],
-            )
+        query_count = 0
+        while query_count < n_queries:
+            qtype_name = sample_type(question_pool, last_type)
 
-            content = None
-            for attempt in range(max_retries):
-                content, elapsed = call_api(
+            # ── Handle evolve ─────────────────────────────────────────
+            if qtype_name == "evolve":
+                if not all_turns:
+                    # No history, retry with different type
+                    continue
+                evolve_result = try_evolve(
+                    all_turns, groups, tokenizer,
                     api_base, api_key, protocol, model,
-                    SYSTEM_PROMPT, prompt,
-                    max_tokens_per_call, temperature,
+                    max_tokens_per_call, temperature, max_retries,
                 )
-                api_time_s += elapsed
-                if content:
+                if evolve_result is None:
+                    continue  # retry with different type
+                turn, evolve_time = evolve_result
+                api_time_s += evolve_time
+
+            else:
+                # ── Normal question generation ─────────────────────
+                prompt = MULTI_TURN_PROMPT.format(
+                    conversation=format_conversation(groups, all_turns),
+                    type_instruction=QUESTION_TYPE_DEFS[qtype_name]["instruction"],
+                )
+                last_type = qtype_name
+
+                content = None
+                for attempt in range(max_retries):
+                    content, elapsed = call_api(
+                        api_base, api_key, protocol, model,
+                        SYSTEM_PROMPT, prompt,
+                        max_tokens_per_call, temperature,
+                    )
+                    api_time_s += elapsed
+                    if content:
+                        break
+                    print(f"    [retry {attempt + 1}/{max_retries}]", file=sys.stderr)
+
+                if not content:
                     break
-                print(f"    [retry {attempt + 1}/{max_retries}]", file=sys.stderr)
 
-            if not content:
-                break
+                turn = parse_one_turn(content)
+                if not turn:
+                    print(f"    [warn] unparseable turn, skipping", file=sys.stderr)
+                    continue
 
-            turn = parse_one_turn(content)
-            if not turn:
-                print(f"    [warn] unparseable turn, skipping", file=sys.stderr)
-                continue
-
+            # ── Token counting & append ──────────────────────────
             candidate_turns = all_turns + [(group_idx, turn)]
             msgs = build_messages(groups, candidate_turns)
             if msgs is None:
@@ -250,6 +371,7 @@ def process_conversation(
             all_turns.append((group_idx, turn))
             total_tokens = candidate_total
             group_has_turns = True
+            query_count += 1
 
         if not group_has_turns:
             break
@@ -329,7 +451,6 @@ def main() -> None:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     state_path = Path(args.input).with_suffix(_STATE_SUFFIX)
 
-    # ── Resume state ──────────────────────────────────────────────
     if args.resume and state_path.exists():
         state = json.loads(state_path.read_text())
         samples_done = state.get("samples_done", 0)
@@ -348,10 +469,8 @@ def main() -> None:
     mode = "a" if args.resume and out_path.exists() else "w"
     completed = errors = 0
     start_time = time.time()
-    lock = threading.Lock()
 
     if args.max_workers <= 1:
-        # ── Single-thread: read batch → process → write ──────────────
         with open(out_path, mode) as out:
             for batch in _batch_docs(doc_iter, args.max_docs):
                 if args.max_samples and samples_done >= args.max_samples:
@@ -395,7 +514,6 @@ def main() -> None:
                     f"api={api_time_s if result else 0:.1f}s  {rate:.2f} conv/s"
                 )
     else:
-        # ── Multi-thread: pre-batch conversations, then parallel ──────
         batches = list(_batch_docs(doc_iter, args.max_docs))
         if args.max_samples:
             batches = batches[:max(0, args.max_samples - samples_done)]
@@ -421,7 +539,6 @@ def main() -> None:
                         idx, data = future.result()
                         results[idx] = data
 
-                    # Write in order as batches complete
                     while completed in results:
                         data = results.pop(completed)
                         completed += 1
