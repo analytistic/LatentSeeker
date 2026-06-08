@@ -48,9 +48,17 @@ QUESTION_TYPE_DEFS: dict[str, dict[str, str]] = {
         "instruction": "Ask a follow-up question that builds on the previous Q&A turn. This could ask for elaboration, clarification, a deeper dive, or an implication of the previous answer.",
         "source": "history",
     },
+    "evolve": {
+        "instruction": "Based on the previous Q&A turn, rewrite the question to be more challenging. Increase reasoning depth, add constraints, combine multiple concepts, or introduce edge cases. Then answer the new question.",
+        "source": "history",
+    },
     "synthesis": {
         "instruction": "Ask a question that combines information from both the document and the previous conversation turns to reach a new insight or synthesis.",
         "source": "both",
+    },
+    "math_reasoning": {
+        "instruction": "Ask a math or quantitative reasoning question based on numerical data, statistics, or quantitative information mentioned in the document. The question should require multi-step reasoning (calculations, comparisons, percentages, ratios, etc.) rather than a simple lookup.",
+        "source": "longtext",
     },
 }
 
