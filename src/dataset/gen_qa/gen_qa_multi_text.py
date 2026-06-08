@@ -47,6 +47,7 @@ from transformers import AutoTokenizer
 from .base import (
     QUESTION_TYPE_DEFS,
     SYSTEM_PROMPT,
+    _STATE_SUFFIX,
     add_common_args,
     call_api,
     format_history,
