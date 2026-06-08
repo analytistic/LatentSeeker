@@ -77,14 +77,20 @@ Question: <evolved question>
 Reasoning: <step-by-step reasoning>
 Answer: <concise answer>"""
 
-CHECK_PROMPT = """Does the following question meet ALL requirements?
+CHECK_PROMPT = """{conversation}
 
-1. Meaningful (not trivial, not repetitive of the seed)
-2. Solvable (can be answered using the documents available)
-3. Non-trivial (requires reasoning, not a simple lookup)
+Seed Q&A:
+{seed_q}
 
-Question: {question}
-Answer: {answer}
+Evolved question:
+{question}
+Evolved answer:
+{answer}
+
+Check ALL requirements:
+1. Meaningful: not trivial, not repetitive of the seed
+2. Solvable: can be answered using the documents above
+3. Non-trivial: requires reasoning, not a simple lookup
 
 Answer ONLY with YES or NO."""
 
@@ -241,9 +247,12 @@ def try_evolve(
         if not turn:
             continue
 
-        # Check: meaningful and solvable?
+        # Check: meaningful and solvable? (include context + seed for judgement)
         check_prompt = CHECK_PROMPT.format(
-            question=turn["question"], answer=turn["answer"]
+            conversation=format_conversation(groups, all_turns),
+            seed_q=seed_q,
+            question=turn["question"],
+            answer=turn["answer"],
         )
         check_result, _ = call_api(
             api_base, api_key, protocol, model,
