@@ -47,15 +47,12 @@ from transformers import AutoTokenizer
 from .base import (
     QUESTION_TYPE_DEFS,
     SYSTEM_PROMPT,
-    _STATE_SUFFIX,
     add_common_args,
     call_api,
     format_history,
-    load_progress,
     parse_one_turn,
     parse_type_spec,
     sample_type,
-    save_progress,
 )
 
 # ── Prompts ─────────────────────────────────────────────────────────────
@@ -251,6 +248,17 @@ def _build_parser() -> argparse.ArgumentParser:
     return p
 
 
+_STATE_SUFFIX = ".gen_qa_progress.json"
+
+
+def _save_progress(path: Path, done: set[int]) -> None:
+    path.write_text(json.dumps({"done": sorted(done)}))
+
+
+def _load_progress(path: Path) -> set[int]:
+    return set(json.loads(path.read_text()).get("done", [])) if path.exists() else set()
+
+
 def main() -> None:
     args = _build_parser().parse_args()
     api_key = args.api_key or os.environ.get("DEEPSEEK_API_KEY", "")
@@ -269,7 +277,7 @@ def main() -> None:
     out_path = Path(args.output)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    done = load_progress(state_path) if args.resume else set()
+    done = _load_progress(state_path) if args.resume else set()
     remaining = [i for i in range(total) if i not in done]
 
     if not remaining:
@@ -325,7 +333,7 @@ def main() -> None:
                 else:
                     errors += 1
                 done.add(idx)
-                save_progress(state_path, done)
+                _save_progress(state_path, done)
                 n = turns_info["num_turns"] if turns_info else 0
                 eta = _eta(time.time() - start_time, completed, len(remaining))
                 print(
@@ -382,7 +390,7 @@ def main() -> None:
                     else:
                         errors += 1
                     done.add(idx)
-                    save_progress(state_path, done)
+                    _save_progress(state_path, done)
                     n = turns_info["num_turns"] if turns_info else 0
                     eta = _eta(time.time() - start_time, completed, len(remaining))
                     print(

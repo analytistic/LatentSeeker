@@ -36,7 +36,9 @@ from transformers import AutoTokenizer
 from .base import (
     QUESTION_TYPE_DEFS,
     SYSTEM_PROMPT,
-    _STATE_SUFFIX,
+    MULTI_TURN_PROMPT,
+    EVOLVE_PROMPT,
+    CHECK_PROMPT,
     add_common_args,
     call_api,
     parse_one_turn,
@@ -44,55 +46,6 @@ from .base import (
     sample_type,
 )
 
-# ── Prompts ─────────────────────────────────────────────────────────────
-
-MULTI_TURN_PROMPT = """{conversation}
-Now generate the next question about the documents above.
-
-When referencing a document or part of it, be specific about the
-position (e.g. "the first document", "Document 2") rather than
-using vague references like "the above".
-
-Question type: {type_instruction}
-
-Output exactly in this format:
-Question: <question>
-Reasoning: <step-by-step reasoning>
-Answer: <concise answer>"""
-
-
-EVOLVE_PROMPT = """Seed question:
-Q: {seed_q}
-A: {seed_a}
-
-Evolve type: {evolve_type}
-
-- depth: Increase reasoning steps, require deeper multi-step inference.
-- breadth: Combine with another concept or information from the documents.
-- constraint: Add new conditions, constraints, or edge cases.
-- backward: Reverse the direction — given the answer, infer the cause or conditions.
-
-Use the documents above for context. Output exactly:
-Question: <evolved question>
-Reasoning: <step-by-step reasoning>
-Answer: <concise answer>"""
-
-CHECK_PROMPT = """{conversation}
-
-Seed Q&A:
-{seed_q}
-
-Evolved question:
-{question}
-Evolved answer:
-{answer}
-
-Check ALL requirements:
-1. Meaningful: not trivial, not repetitive of the seed
-2. Solvable: can be answered using the documents above
-3. Non-trivial: requires reasoning, not a simple lookup
-
-Answer ONLY with YES or NO."""
 
 
 # ── Formatting ──────────────────────────────────────────────────────────
@@ -104,9 +57,9 @@ def format_conversation(
     """Format conversation with docs and Q&A grouped by batch."""
     blocks = []
     for g_idx, group in enumerate(groups):
-        block = f"Group {g_idx + 1}:\n"
-        for doc in group:
-            block += f"\n{doc}\n---\n"
+        block = f"Longtext Turn {g_idx + 1}:\n"
+        for doc_idx, doc in enumerate(group):
+            block += f"\nLongtext {doc_idx + 1}:\n{doc}\n---\n"
         for i, (gi, t) in enumerate(turns):
             if gi == g_idx:
                 block += f"\nQ{i + 1}: {t['question']}\nR{i + 1}: {t['reasoning']}\nA{i + 1}: {t['answer']}"
@@ -445,6 +398,9 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--max-group-query-num", type=int, default=3,
                     help="Max Q&A turns per group (random 1..N)")
     return p
+
+
+_STATE_SUFFIX = ".gen_qa_progress.json"
 
 
 def main() -> None:
