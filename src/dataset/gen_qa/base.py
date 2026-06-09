@@ -99,6 +99,58 @@ SYSTEM_PROMPT = (
 )
 
 
+# ── Generation prompts (moved from gen_qa_multi_turn) ─────────────────────────────────────────────────────────────
+
+MULTI_TURN_PROMPT = """{conversation}
+Now generate the next question about the longtexts above.
+
+When referencing a longtext or part of it, be specific about the
+position (e.g. "the first LongText Turn", "Longtext Turn 1",
+"the second Longtext of the first Longtext Turn", "Longtext Turn 1 Longtext 2").
+You can also reference subsections within a longtext
+(e.g. "Longtext Turn 1 Longtext 2 section 3").
+
+Question type: {type_instruction}
+
+Output exactly in this format:
+Question: <question>
+Reasoning: <step-by-step reasoning>
+Answer: <concise answer>"""
+
+
+EVOLVE_PROMPT = """Seed question:
+Q: {seed_q}
+A: {seed_a}
+
+Evolve type: {evolve_type}
+
+- depth: Increase reasoning steps, require deeper multi-step inference.
+- breadth: Combine with another concept or information from the Longtext Turns.
+- constraint: Add new conditions, constraints, or edge cases.
+- backward: Reverse the direction — given the answer, infer the cause or conditions.
+
+Use the Longtext Turns above for context. Output exactly:
+Question: <evolved question>
+Reasoning: <step-by-step reasoning>
+Answer: <concise answer>"""
+
+CHECK_PROMPT = """{conversation}
+
+Seed Q&A:
+{seed_q}
+
+Evolved question:
+{question}
+Evolved answer:
+{answer}
+
+Check ALL requirements:
+1. Meaningful: not trivial, not repetitive of the seed
+2. Solvable: can be answered using the documents above
+3. Non-trivial: requires reasoning, not a simple lookup
+
+Answer ONLY with YES or NO."""
+
 def format_history(turns: list[dict[str, str]]) -> str:
     if not turns:
         return ""
@@ -205,10 +257,6 @@ def call_api(
         return None, elapsed
 
 
-# ── Checkpoint ──────────────────────────────────────────────────────────
-
-_STATE_SUFFIX = ".gen_qa_progress.json"
-
 
 def save_progress(path: Path, done: set[int]) -> None:
     path.write_text(json.dumps({"done": sorted(done)}))
@@ -247,34 +295,3 @@ def add_common_args(p) -> None:
     p.add_argument("--resume", action="store_true")
 
 
-def make_worker_args(
-    remaining: list[int],
-    dataset,
-    tokenizer,
-    api_base,
-    api_key,
-    protocol,
-    model,
-    budget_tokens,
-    max_tokens_per_call,
-    temperature,
-    question_pool,
-    extra_kwargs: dict | None = None,
-) -> list[tuple]:
-    """Build argument tuples for worker functions."""
-    base_args = [
-        idx,
-        dataset[idx],
-        tokenizer,
-        api_base,
-        api_key,
-        protocol,
-        model,
-        budget_tokens,
-        max_tokens_per_call,
-        temperature,
-        question_pool,
-    ]
-    if extra_kwargs:
-        base_args.append(extra_kwargs)
-    return [tuple(a) for a in base_args]

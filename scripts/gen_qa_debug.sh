@@ -7,7 +7,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$SCRIPT_DIR"
 
-export DEEPSEEK_API_KEY="${DEEPSEEK_API_KEY:-sk-879b11c1900641a0adf028f1572ad731}"
+export DEEPSEEK_API_KEY="${DEEPSEEK_API_KEY:-sk-your-key-here}"
 
 python3 -m src.dataset.gen_qa.gen_qa \
     --input data/debug/debug.jsonl \

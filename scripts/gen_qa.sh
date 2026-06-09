@@ -8,7 +8,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$SCRIPT_DIR"
 
 # For a real run, set this in your env instead of here:
-export DEEPSEEK_API_KEY="${DEEPSEEK_API_KEY:-sk-879b11c1900641a0adf028f1572ad731}"
+export DEEPSEEK_API_KEY="${DEEPSEEK_API_KEY:-sk-your-key-here}"
 
 INPUT="${INPUT:-data/wiki/wiki_15k.jsonl}"
 OUTPUT="${OUTPUT:-data/wiki/processed_qa}"
