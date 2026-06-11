@@ -27,7 +27,7 @@ import random
 import sys
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
 from pathlib import Path
 from typing import Any, Generator, Literal
 
@@ -59,7 +59,7 @@ def format_conversation(
     for g_idx, group in enumerate(groups):
         block = f"Longtext Turn {g_idx + 1}:\n"
         for doc_idx, doc in enumerate(group):
-            block += f"\nLongtext {doc_idx + 1}:\n{doc}\n---\n"
+            block += f"\nLongtext {doc_idx + 1}:\n{doc}\n"
         for i, (gi, t) in enumerate(turns):
             if gi == g_idx:
                 block += f"\nQ{i + 1}: {t['question']}\nR{i + 1}: {t['reasoning']}\nA{i + 1}: {t['answer']}"
@@ -479,13 +479,23 @@ def main() -> None:
                     f"api={api_time_s if result else 0:.1f}s  {rate:.2f} conv/s"
                 )
     else:
-        batches = list(_batch_docs(doc_iter, args.max_docs))
-        if args.max_samples:
-            batches = batches[:max(0, args.max_samples - samples_done)]
+        batch_iter = enumerate(_batch_docs(doc_iter, args.max_docs))
+        batch_sizes: dict[int, int] = {}
 
         with ThreadPoolExecutor(max_workers=args.max_workers) as pool:
-            futures = {}
-            for idx, batch in enumerate(batches):
+            futures: dict[Any, int] = {}
+            results: dict[int, Any] = {}
+            total_submitted = 0
+            max_samples_remaining = (args.max_samples or sys.maxsize) - samples_done
+
+            # ── Step 1: 填满线程池（启动 max_workers 个 in-flight 任务） ──
+            for _ in range(min(args.max_workers, max_samples_remaining)):
+                try:
+                    idx, batch = next(batch_iter)
+                except StopIteration:
+                    break
+                batch_sizes[idx] = len(batch)
+                total_submitted += 1
                 futures[pool.submit(
                     _worker_task, idx, batch, tokenizer,
                     args.api_base, api_key, args.api_protocol, args.model,
@@ -494,16 +504,32 @@ def main() -> None:
                     args.max_docs, args.max_group_size, args.max_group_query_num,
                 )] = idx
 
+            # ── Step 2: 循环处理，完成一个补一个 ──
             with open(out_path, mode) as out:
-                results = {}
-                remaining_futures = set(futures.keys())
-                while remaining_futures:
-                    done, remaining_futures = as_completed(
-                        remaining_futures), set()
-                    for future in done:
-                        idx, data = future.result()
+                while futures:
+                    done, _ = wait(futures, return_when=FIRST_COMPLETED)
+                    for f in done:
+                        idx, data = f.result()
+                        futures.pop(f)
                         results[idx] = data
 
+                        # 补一个新 batch（保持 in-flight 数量 ≈ max_workers）
+                        if total_submitted < max_samples_remaining:
+                            try:
+                                nidx, nbatch = next(batch_iter)
+                                batch_sizes[nidx] = len(nbatch)
+                                total_submitted += 1
+                                futures[pool.submit(
+                                    _worker_task, nidx, nbatch, tokenizer,
+                                    args.api_base, args.api_key, args.api_protocol, args.model,
+                                    args.max_qa_tokens, args.max_tokens_per_call,
+                                    args.temperature, question_pool,
+                                    args.max_docs, args.max_group_size, args.max_group_query_num,
+                                )] = nidx
+                            except StopIteration:
+                                pass
+
+                    # ── Step 3: 保序写 ──
                     while completed in results:
                         data = results.pop(completed)
                         completed += 1
@@ -511,7 +537,7 @@ def main() -> None:
                             errors += 1
                             continue
                         samples_done += 1
-                        lines_read += len(batches[completed - 1])
+                        lines_read += batch_sizes[completed - 1]
                         out.write(json.dumps(data, ensure_ascii=False) + "\n")
                         out.flush()
                         state_path.write_text(
