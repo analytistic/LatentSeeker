@@ -1,8 +1,9 @@
-"""LatentSeeker pre-training: repeat task with curriculum compression."""
+"""LatentSeeker training entry point — dispatches to trainer class by name."""
 
 import argparse
 import json
 import sys
+from typing import Any
 
 import yaml
 from datasets import load_from_disk
@@ -19,9 +20,81 @@ from src.utils.arguments import DataArgs, ModelArgs, LatentSeekerTrainingArgumen
 from src.utils.freeze import apply_freeze
 from transformers import PreTrainedConfig
 
-from .trainer import build_trainer
+from .callback import CurriculumCallback
+from .collator import DynamicCompressCollator
+from .opd_trainer import OPSDTrainer
+from .weighted_trainer import WeightedMultiTaskTrainer
+from .trainer import Trainer
 
 
+# ── Trainer registry ────────────────────────────────────────────────────────
+
+TRAINER_REGISTRY: dict = {
+    "Trainer": Trainer,
+    "WeightedMultiTaskTrainer": WeightedMultiTaskTrainer,
+    "OPSDTrainer": OPSDTrainer,
+}
+
+
+def build_trainer(
+    model: Any,
+    processor: Any,
+    train_dataset: Any,
+    eval_dataset: Any = None,
+    args: LatentSeekerTrainingArguments | None = None,
+    compress_stages: list[tuple[float, int]] | None = None,
+    dataset_lengths: dict[str, int] | None = None,
+    dataset_weights: dict[str, float] | None = None,
+    dataset_names: list[str] | None = None,
+) -> Trainer:
+    """Build a Trainer with LatentSeeker-specific collator and callbacks.
+
+    Args:
+        model: LatentSeekerForConditionalGeneration.
+        processor: LatentSeekerProcessor.
+        train_dataset: Dataset with "messages" column.
+        compress_stages: Curriculum stages [(progress, compress_ratio), ...].
+            If None, compress_ratio defaults to 8 throughout training.
+        dataset_lengths: Per-dataset lengths for weighted sampling.
+        dataset_weights: Per-dataset sampling weights.
+        dataset_names: Ordered dataset names matching the combined dataset.
+    """
+    collator = DynamicCompressCollator(
+        processor=processor,
+        vocab_size=model.config.text_config.vocab_size,
+    )
+
+    callbacks = []
+    if compress_stages:
+        callbacks.append(CurriculumCallback(compress_stages, collator=collator))
+
+    trainer_name = getattr(args, "trainer", None) or "Trainer"
+    trainer_cls = TRAINER_REGISTRY.get(trainer_name)
+    if trainer_cls is None:
+        raise ValueError(
+            f"Unknown trainer '{trainer_name}'. Available: {list(TRAINER_REGISTRY)}"
+        )
+
+    kwargs: dict[str, Any] = {}
+    if dataset_lengths is not None:
+        kwargs["dataset_lengths"] = dataset_lengths
+        kwargs["dataset_weights"] = dataset_weights or {}
+        kwargs["dataset_names"] = dataset_names or []
+
+    trainer = trainer_cls(
+        model=model,
+        args=args,
+        train_dataset=train_dataset,
+        eval_dataset=eval_dataset,
+        data_collator=collator,
+        callbacks=callbacks,
+        processing_class=processor,
+        **kwargs,
+    )
+    return trainer
+
+
+# ── Argument parsing ────────────────────────────────────────────────────────
 
 def _parse_args(
     config_path: str | None = None,

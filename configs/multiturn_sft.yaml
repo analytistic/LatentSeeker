@@ -10,13 +10,13 @@ datasets:
   wiki:
     path: data/wiki/processed_wiki
     weight: 0.5
-  qa:
-    path: data/gen_wiki/processed_gen_qa
+  multi_turn:
+    path: data/multi_turn/processed_gen_multi_turn
     weight: 0.5
 
-per_device_train_batch_size: 2
+per_device_train_batch_size: 1
 gradient_accumulation_steps: 32
-dataloader_num_workers: 4
+dataloader_num_workers: 0
 remove_unused_columns: false
 
 # Schedule

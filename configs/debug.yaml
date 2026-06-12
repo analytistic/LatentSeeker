@@ -1,5 +1,7 @@
 output_dir: outputs/debug
 
+trainer: WeightedMultiTaskTrainer
+
 # Data — multi-dataset mixing
 datasets:
   wiki:

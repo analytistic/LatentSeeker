@@ -1,61 +1,12 @@
-"""LatentSeeker trainer builder."""
+"""LatentSeeker basic trainer classes.
 
-from typing import Any
+For builder logic see train.py.
+"""
 
-from transformers import Trainer, TrainingArguments
+import transformers
 
-from .callback import CurriculumCallback
-from .collator import DynamicCompressCollator
-from .weighted_trainer import WeightedMultiTaskTrainer
+class Trainer(transformers.Trainer):
+    """Basic Trainer that inherits from transformers.Trainer.
 
-
-def build_trainer(
-    model: Any,
-    processor: Any,
-    train_dataset: Any,
-    eval_dataset: Any = None,
-    args: TrainingArguments | None = None,
-    compress_stages: list[tuple[float, int]] | None = None,
-    dataset_lengths: dict[str, int] | None = None,
-    dataset_weights: dict[str, float] | None = None,
-    dataset_names: list[str] | None = None,
-) -> Trainer:
-    """Build a Trainer with LatentSeeker-specific collator and callbacks.
-
-    Args:
-        model: LatentSeekerForConditionalGeneration.
-        processor: LatentSeekerProcessor.
-        train_dataset: Dataset with "messages" column.
-        compress_stages: Curriculum stages [(progress, compress_ratio), ...].
-            If None, compress_ratio defaults to 8 throughout training.
-        dataset_lengths: Per-dataset lengths for weighted sampling.
-        dataset_weights: Per-dataset sampling weights.
-            If provided, uses WeightedMultiTaskTrainer instead of Trainer.
+    This is the default trainer used if no custom trainer is specified.
     """
-    collator = DynamicCompressCollator(
-        processor=processor,
-        vocab_size=model.config.text_config.vocab_size,
-    )
-
-    callbacks = []
-    if compress_stages:
-        callbacks.append(CurriculumCallback(compress_stages, collator=collator))
-
-    trainer_cls = WeightedMultiTaskTrainer if dataset_lengths else Trainer
-    kwargs = {}
-    if dataset_lengths:
-        kwargs["dataset_lengths"] = dataset_lengths
-        kwargs["dataset_weights"] = dataset_weights or {}
-        kwargs["dataset_names"] = dataset_names or []
-
-    trainer = trainer_cls(
-        model=model,
-        args=args,
-        train_dataset=train_dataset,
-        eval_dataset=eval_dataset,
-        data_collator=collator,
-        callbacks=callbacks,
-        processing_class=processor,
-        **kwargs,
-    )
-    return trainer
